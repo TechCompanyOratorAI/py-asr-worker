@@ -1,7 +1,16 @@
 # =============================================================================
-# Stage 1: Base image with FFmpeg
+# Stage 1: Base image with CUDA and FFmpeg
 # =============================================================================
-FROM python:3.11-slim as base
+# Use NVIDIA CUDA base image for GPU support
+FROM nvidia/cuda:12.1.0-cudnn8-runtime-ubuntu22.04 as base
+
+# Install Python 3.12
+RUN apt-get update && apt-get install -y \
+    python3.12 \
+    python3.12-dev \
+    python3-pip \
+    && update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1 \
+    && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
@@ -48,7 +57,7 @@ RUN useradd -m -u 1000 asrworker && \
 WORKDIR /app
 
 # Copy Python dependencies from builder
-COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Copy application code
