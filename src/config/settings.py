@@ -70,6 +70,21 @@ class Settings(BaseSettings):
     PROCESSING_TIMEOUT: int = Field(default=600, description="Processing timeout (seconds)")
     WEBHOOK_TIMEOUT: int = Field(default=30, description="Webhook timeout (seconds)")
     
+    # Additional fields from .env (optional)
+    AWS_S3_REGION: Optional[str] = Field(default=None, description="S3 region (optional)")
+    BEAM_SIZE: Optional[int] = Field(default=5, description="Whisper beam size")
+    VAD_FILTER: Optional[bool] = Field(default=True, description="Enable VAD filter")
+    OVERLAP_THRESHOLD: Optional[float] = Field(default=0.5, description="Speaker overlap threshold")
+    MAX_AUDIO_SIZE_MB: Optional[int] = Field(default=500, description="Max audio file size")
+    MAX_AUDIO_DURATION_SECONDS: Optional[int] = Field(default=3600, description="Max audio duration")
+    TARGET_SAMPLE_RATE: Optional[int] = Field(default=16000, description="Target sample rate")
+    MIN_AUDIO_SIZE_KB: Optional[int] = Field(default=10, description="Min audio file size")
+    WORKER_NAME: Optional[str] = Field(default=None, description="Worker name")
+    USE_MOCK_SERVICES: Optional[bool] = Field(default=False, description="Use mock services")
+    NUM_WORKERS: Optional[int] = Field(default=4, description="Number of worker threads")
+    DOWNLOAD_CHUNK_SIZE: Optional[int] = Field(default=8388608, description="Download chunk size")
+    UPLOAD_CHUNK_SIZE: Optional[int] = Field(default=8388608, description="Upload chunk size")
+    
     # ========================================
     # Logging Configuration
     # ========================================
@@ -103,6 +118,7 @@ class Settings(BaseSettings):
         env_file = ".env"
         env_file_encoding = "utf-8"
         case_sensitive = True
+        extra = "allow"  # Allow extra fields from .env
     
     @property
     def webhook_url(self) -> str:
