@@ -11,6 +11,12 @@ services:
     container_name: py-asr-worker
     restart: unless-stopped
 
+    # GPU support (requires nvidia-docker2)
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
     # Environment variables (override with .env file)
     env_file:
       - .env
