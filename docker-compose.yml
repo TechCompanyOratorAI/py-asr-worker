@@ -1,0 +1,102 @@
+version: "3.8"
+
+services:
+  # =============================================================================
+  # ASR Worker Service
+  # =============================================================================
+  asr-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: py-asr-worker
+    restart: unless-stopped
+
+    # Environment variables (override with .env file)
+    env_file:
+      - .env
+
+    # Volume mounts
+    volumes:
+      # Application code (for development hot-reload)
+      - ./src:/app/src:ro
+      # Logs directory
+      - ./logs:/app/logs
+      # Model cache (persist downloaded models)
+      - asr-models:/app/models
+      - huggingface-cache:/home/asrworker/.cache/huggingface
+      # Temporary files
+      - /tmp/asr-worker:/tmp/asr-worker
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: "4"
+          memory: 8G
+        reservations:
+          cpus: "2"
+          memory: 4G
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    # Network
+    networks:
+      - asr-network
+
+  # =============================================================================
+  # Optional: LocalStack for AWS services (development only)
+  # =============================================================================
+  localstack:
+    image: localstack/localstack:latest
+    container_name: localstack-asr
+    ports:
+      - "4566:4566" # LocalStack gateway
+      - "4510-4559:4510-4559" # External services
+    environment:
+      - SERVICES=s3,sqs
+      - DEBUG=1
+      - DATA_DIR=/tmp/localstack/data
+      - DOCKER_HOST=unix:///var/run/docker.sock
+    volumes:
+      - localstack-data:/tmp/localstack
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - asr-network
+    profiles:
+      - dev
+
+# =============================================================================
+# Volumes
+# =============================================================================
+volumes:
+  # Persist Whisper and pyannote models
+  asr-models:
+    driver: local
+
+  # Persist HuggingFace cache
+  huggingface-cache:
+    driver: local
+
+  # LocalStack data (development only)
+  localstack-data:
+    driver: local
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  asr-network:
+    driver: bridge
