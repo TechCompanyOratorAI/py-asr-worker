@@ -462,11 +462,8 @@ class DiarizationService:
         speaker_data = {}
         total_duration = 0.0
         
-        # Aggregate by speaker
+        # Aggregate by speaker (INCLUDING UNKNOWN)
         for seg in merged_segments:
-            if seg.speaker_label == "UNKNOWN":
-                continue
-            
             duration = seg.end - seg.start
             total_duration += duration
             

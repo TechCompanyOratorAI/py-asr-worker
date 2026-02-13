@@ -377,7 +377,7 @@ class ASRWorker:
             merged_segments = self.diarization_service.merge_with_transcript(
                 transcript_segments=transcript_segments,
                 diarization_segments=diarization_segments,
-                overlap_threshold=0.5
+                overlap_threshold=settings.OVERLAP_THRESHOLD
             )
             
             # Get speaker info
