@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     AWS_REGION: str = Field(default="ap-southeast-1", description="AWS region")
     AWS_S3_BUCKET: str = Field(..., description="S3 bucket name")
     AWS_SQS_ASR_QUEUE_URL: str = Field(..., description="SQS ASR queue URL")
+    AWS_SQS_ANALYST_QUEUE_URL: str = Field(..., description="SQS Analyst queue URL for analysis jobs")
     
     # ========================================
     # Node API Configuration

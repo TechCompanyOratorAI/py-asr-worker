@@ -52,6 +52,7 @@ class SQSService:
     def __init__(self):
         """Initialize SQS client"""
         self.queue_url = settings.AWS_SQS_ASR_QUEUE_URL
+        self.analyst_queue_url = settings.AWS_SQS_ANALYST_QUEUE_URL
         
         if not self.queue_url:
             raise ConfigurationError(
@@ -69,7 +70,8 @@ class SQSService:
             )
             
             logger.info("✅ SQS client initialized")
-            logger.info(f"   - Queue URL: {self.queue_url}")
+            logger.info(f"   - ASR Queue URL: {self.queue_url}")
+            logger.info(f"   - Analyst Queue URL: {self.analyst_queue_url}")
             logger.info(f"   - Region: {settings.AWS_REGION}")
             logger.info(f"   - Max messages: {settings.MAX_MESSAGES}")
             logger.info(f"   - Wait time: {settings.WAIT_TIME_SECONDS}s")
@@ -268,6 +270,62 @@ class SQSService:
         except Exception as e:
             logger.error(f"❌ Unexpected error deleting message: {e}", exc_info=True)
             raise SQSMessageError(f"Unexpected error deleting message: {str(e)}")
+    
+    def send_message(
+        self,
+        message_body: Dict[str, Any],
+        queue_type: str = "analyst"
+    ) -> bool:
+        """
+        Send message to SQS queue
+        
+        Args:
+            message_body: Message payload (will be JSON serialized)
+            queue_type: Queue type - "asr" or "analyst" (default: "analyst")
+            
+        Returns:
+            True if sent successfully
+            
+        Raises:
+            SQSMessageError: If sending fails
+        """
+        try:
+            # Select queue URL based on type
+            if queue_type == "analyst":
+                target_queue_url = self.analyst_queue_url
+            elif queue_type == "asr":
+                target_queue_url = self.queue_url
+            else:
+                raise ValueError(f"Invalid queue_type: {queue_type}. Must be 'asr' or 'analyst'")
+            
+            logger.info(f"📤 Sending message to {queue_type} queue...")
+            logger.debug(f"   - Queue URL: {target_queue_url}")
+            logger.debug(f"   - Message: {json.dumps(message_body, indent=2)}")
+            
+            # Send message
+            response = self.sqs_client.send_message(
+                QueueUrl=target_queue_url,
+                MessageBody=json.dumps(message_body, ensure_ascii=False)
+            )
+            
+            message_id = response.get('MessageId')
+            logger.info(f"✅ Message sent successfully to {queue_type} queue")
+            logger.info(f"   - Message ID: {message_id}")
+            
+            return True
+            
+        except ClientError as e:
+            error_code = e.response.get('Error', {}).get('Code', 'Unknown')
+            error_message = e.response.get('Error', {}).get('Message', str(e))
+            
+            logger.error(f"❌ Failed to send message: {error_code} - {error_message}")
+            raise SQSMessageError(
+                f"Failed to send message to {queue_type} queue: {error_message}",
+                details={"error_code": error_code, "queue_type": queue_type}
+            )
+        except Exception as e:
+            logger.error(f"❌ Unexpected error sending message: {e}", exc_info=True)
+            raise SQSMessageError(f"Unexpected error sending message: {str(e)}")
     
     def change_visibility(
         self,
