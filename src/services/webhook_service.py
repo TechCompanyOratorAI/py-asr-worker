@@ -64,7 +64,7 @@ class WebhookService:
         """
         # Build fullText from segments
         full_text = "\n\n".join([
-            f"[{seg.get('speaker', 'UNKNOWN')}] {seg.get('text', '')}"
+            f"[{seg.get('speakerLabel', 'UNKNOWN')}] {seg.get('text', '')}"
             for seg in transcript_segments
         ])
         
@@ -84,7 +84,7 @@ class WebhookService:
         segment_speaker_mappings = [
             {
                 "order": idx + 1,
-                "aiSpeakerLabel": seg.get("speaker", "UNKNOWN")
+                "aiSpeakerLabel": seg.get("speakerLabel", "UNKNOWN")
             }
             for idx, seg in enumerate(transcript_segments)
         ]
@@ -92,7 +92,7 @@ class WebhookService:
         # Format speakers for diarization
         formatted_speakers = [
             {
-                "aiSpeakerLabel": spk.get("label", "UNKNOWN"),
+                "aiSpeakerLabel": spk.get("aiSpeakerLabel", "UNKNOWN"),
                 "segments": [],  # Not used by backend
                 "metadata": {
                     "segmentCount": spk.get("segmentCount", 0),

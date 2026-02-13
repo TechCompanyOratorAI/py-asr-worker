@@ -74,7 +74,7 @@ class Settings(BaseSettings):
     AWS_S3_REGION: Optional[str] = Field(default=None, description="S3 region (optional)")
     BEAM_SIZE: Optional[int] = Field(default=5, description="Whisper beam size")
     VAD_FILTER: Optional[bool] = Field(default=True, description="Enable VAD filter")
-    OVERLAP_THRESHOLD: Optional[float] = Field(default=0.5, description="Speaker overlap threshold")
+    OVERLAP_THRESHOLD: Optional[float] = Field(default=0.3, description="Speaker overlap threshold (0.0-1.0). Lower = more permissive matching")
     MAX_AUDIO_SIZE_MB: Optional[int] = Field(default=500, description="Max audio file size")
     MAX_AUDIO_DURATION_SECONDS: Optional[int] = Field(default=3600, description="Max audio duration")
     TARGET_SAMPLE_RATE: Optional[int] = Field(default=16000, description="Target sample rate")
