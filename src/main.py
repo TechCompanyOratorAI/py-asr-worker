@@ -246,33 +246,6 @@ class ASRWorker:
                 status="completed"
             )
             
-            # Enqueue analysis job for py-analyst-worker
-            logger.info(f"📮 Enqueueing analysis job to analyst queue...")
-            analyst_job_payload = {
-                "jobId": job_id,
-                "presentationId": presentation_id,
-                "transcriptId": None,  # Will be set by Node API after webhook
-                "metadata": {
-                    "asrCompletedAt": result['metadata'].get('completedAt'),
-                    "audioDuration": result['metadata'].get('audioDuration'),
-                    "totalSegments": result['metadata'].get('totalSegments'),
-                    "uniqueSpeakers": result['metadata'].get('uniqueSpeakers'),
-                    "diarizationEnabled": result['metadata'].get('diarizationEnabled')
-                }
-            }
-            
-            try:
-                self.sqs_service.send_message(
-                    message_body=analyst_job_payload,
-                    queue_type="analyst"
-                )
-                logger.info(f"✅ Analysis job enqueued successfully")
-            except Exception as enqueue_error:
-                logger.error(f"⚠️ Failed to enqueue analysis job: {enqueue_error}")
-                logger.warning(f"   - ASR completed successfully, but analysis job not queued")
-                logger.warning(f"   - Manual intervention may be required")
-                # Don't raise - ASR job succeeded, analyst job can be retried manually
-            
             # Delete message from queue (success)
             logger.info(f"🗑️ Deleting message from queue...")
             self.sqs_service.delete_message(message)
@@ -386,8 +359,8 @@ class ASRWorker:
         transcript_segments = self.asr_service.transcribe(
             audio_path=normalized_path,
             language=settings.WHISPER_LANGUAGE,
-            beam_size=5,
-            vad_filter=True
+            beam_size=settings.BEAM_SIZE,
+            vad_filter=settings.VAD_FILTER
         )
         
         # Step 4: Speaker Diarization
