@@ -1,298 +1,266 @@
-# ASR Worker - Orator AI
+# ASR Worker — OratorAI
 
-Python worker service for Automatic Speech Recognition (ASR) with GPU acceleration.
+Python worker service xử lý **Automatic Speech Recognition (ASR)** với GPU acceleration, dành riêng cho hệ thống OratorAI.
 
-## Overview
+## Tổng quan
 
-This worker polls messages from AWS SQS ASR queue, processes audio files using GPU-accelerated speech-to-text (Whisper) and speaker diarization (pyannote.audio), achieving **11x faster processing** compared to CPU.
+Worker poll message từ **AWS SQS ASR Queue**, download audio từ S3, thực hiện speech-to-text (Whisper GPU) + speaker diarization (pyannote.audio), rồi gửi kết quả về Node API qua webhook.
 
-### Performance
+### Hiệu suất
 
-- **GPU Processing**: 28-minute video processed in ~3 minutes (11x faster than CPU)
-  - ASR: 17.91x realtime on NVIDIA GPU
-  - Diarization: 20.52x realtime on NVIDIA GPU
-- **CPU Processing**: 28-minute video takes ~34 minutes
+- **GPU (GTX 1660 Ti / RTX 3060)**: video 28 phút xử lý ~3 phút (11x nhanh hơn CPU)
+  - ASR: 17.9x realtime
+  - Diarization: 20.5x realtime
+- **CPU**: video 28 phút xử lý ~34 phút
 
-## Features
+---
 
-- 🚀 **GPU Acceleration** - 11x faster processing with CUDA support
-- 🎤 **Automatic Speech Recognition** - Whisper ASR with faster-whisper backend
-- 👥 **Speaker Diarization** - GPU-accelerated pyannote.audio 3.1
-- ☁️ **AWS Integration** - S3 for audio storage, SQS for job queue
-- 🔄 **Async Processing** - Background job processing with retry logic
-- 📊 **Webhook Callback** - Send results back to Node API
-
-## Architecture
+## Pipeline xử lý
 
 ```
 [AWS SQS ASR Queue]
         ↓
-  [ASR Worker] (This service)
-        ↓
-1. Poll message from queue
-2. Download audio from S3
-3. Perform ASR (Speech-to-Text)
-4. Perform Speaker Diarization
-5. Send results to Node API webhook
-6. Delete message from queue
+1. Poll message
+2. Download audio từ S3
+3. Validate & normalize audio (FFmpeg)
+4. ASR — Speech-to-Text (faster-whisper)
+5. Speaker Diarization (pyannote.audio)
+6. Merge transcript + diarization
+7. Gửi kết quả → Node API webhook
+8. Xóa message khỏi queue
 ```
+
+---
 
 ## Tech Stack
 
-- **Python 3.12+**
-- **AWS SDK (boto3)** - S3, SQS
-- **GPU Computing:**
-  - PyTorch 2.5.1+cu121 (CUDA 12.1)
-  - NVIDIA cuDNN 9.1.0
-  - CUDA Toolkit 12.1+
-- **Speech Recognition:**
-  - faster-whisper 1.2.1 (GPU-accelerated Whisper)
-  - ctranslate2 backend for efficient inference
-- **Speaker Diarization:**
-  - pyannote.audio 3.1.1 (GPU-enabled)
-  - HuggingFace token required
+| Thành phần | Thư viện / Version |
+|---|---|
+| Runtime | Python 3.12+ |
+| AWS SDK | boto3 |
+| GPU | PyTorch 2.5.1+cu121, CUDA 12.1, cuDNN 9.x |
+| ASR | faster-whisper 1.2.1 (ctranslate2 backend) |
+| Diarization | pyannote.audio 3.1.1 |
+| Audio | FFmpeg, pydub, librosa, soundfile |
 
-## Project Structure
+---
+
+## Cấu trúc project
 
 ```
 py-asr-worker/
 ├── src/
 │   ├── __init__.py
-│   ├── main.py                 # Entry point
+│   ├── main.py                    # Entry point — ASRWorker class
 │   ├── config/
 │   │   ├── __init__.py
-│   │   └── settings.py         # Environment configuration
+│   │   └── settings.py            # Pydantic settings từ .env
 │   ├── services/
 │   │   ├── __init__.py
-│   │   ├── sqs_service.py      # SQS polling and message handling
-│   │   ├── s3_service.py       # S3 download/upload
-│   │   ├── asr_service.py      # Speech-to-text processing
-│   │   ├── diarization_service.py  # Speaker separation
-│   │   └── webhook_service.py  # API callback
+│   │   ├── sqs_service.py         # Poll & delete SQS messages
+│   │   ├── s3_service.py          # Download audio từ S3
+│   │   ├── audio_processor.py     # Validate & normalize audio
+│   │   ├── asr_service.py         # Speech-to-text (Whisper)
+│   │   ├── diarization_service.py # Speaker separation (pyannote)
+│   │   ├── webhook_service.py     # Gửi kết quả về Node API
+│   │   └── __init__.py
 │   └── utils/
 │       ├── __init__.py
-│       ├── logger.py           # Logging setup
-│       └── helpers.py          # Utility functions
+│       ├── logger.py              # Colorlog setup
+│       ├── exceptions.py          # Custom exception classes
+│       ├── helpers.py             # Utility functions
+│       └── validators.py          # Audio validation helpers
 ├── tests/
-│   ├── __init__.py
-│   ├── test_asr_service.py
-│   └── test_diarization_service.py
-├── logs/                       # Log files
-├── requirements.txt            # Python dependencies
-├── .env.example                # Environment variables template
-├── .gitignore                  # Git ignore file
-└── README.md                   # This file
+│   └── __init__.py
+├── logs/                          # Log files (gitignored)
+├── Dockerfile                     # Single-stage GPU image (CUDA 12.1)
+├── docker-compose.yml             # Compose với GPU + named volumes
+├── requirements.txt
+├── .env.example                   # Template biến môi trường
+└── purge_queue.py                 # Script xóa tất cả SQS messages
 ```
 
-## Installation
+---
 
-### Prerequisites
+## Cài đặt & Chạy
 
-- Python 3.12 or higher
-- pip (Python package manager)
-- AWS account with S3 and SQS access
-- FFmpeg (for audio processing)
-- **For GPU acceleration (recommended):**
-  - NVIDIA GPU with 6GB+ VRAM (e.g., GTX 1660 Ti or better)
-  - CUDA Toolkit 12.1 or higher
-  - cuDNN 9.1.0 or higher
+### Cách 1: Docker (Khuyến nghị)
 
-### Setup
-
-1. **Clone the repository** (if not already)
-
-   ```bash
-   cd py-asr-worker
-   ```
-
-2. **Create virtual environment**
-
-   ```bash
-   python -m venv venv
-
-   # Windows
-   venv\Scripts\activate
-
-   # Linux/Mac
-   source venv/bin/activate
-   ```
-
-3. **Install dependencies**
-
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-   **For GPU support:**
-
-   ```bash
-   # Install PyTorch with CUDA 12.1
-   pip install torch==2.5.1+cu121 torchaudio==2.5.1+cu121 --index-url https://download.pytorch.org/whl/cu121
-
-   # Install cuDNN
-   pip install nvidia-cudnn-cu12
-   ```
-
-4. **Setup environment variables**
-
-   ```bash
-   cp .env.example .env
-   # Edit .env with your credentials
-   ```
-
-5. **Install FFmpeg** (required for audio processing)
-
-   ```bash
-   # Windows (using chocolatey)
-   choco install ffmpeg
-
-   # Ubuntu/Debian
-   sudo apt-get install ffmpeg
-
-   # Mac
-   brew install ffmpeg
-   ```
-
-## Configuration
-
-Create `.env` file with the following variables:
-
-```env
-# AWS Configuration
-AWS_ACCESS_KEY_ID=your_access_key
-AWS_SECRET_ACCESS_KEY=your_secret_key
-AWS_REGION=ap-southeast-1
-AWS_S3_BUCKET=amzn-s3-oratorai
-AWS_SQS_ASR_QUEUE_URL=https://sqs.ap-southeast-1.amazonaws.com/.../oratorai-asr-queue
-
-# Node API Configuration
-NODE_API_URL=http://localhost:8080
-WEBHOOK_SECRET=your_webhook_secret
-
-# ASR Configuration
-ASR_ENGINE=whisper
-WHISPER_MODEL=base  # Options: tiny, base, small, medium, large
-WHISPER_LANGUAGE=vi # Vietnamese
-WHISPER_DEVICE=cuda # Use 'cuda' for GPU (17x faster), 'cpu' for CPU
-WHISPER_COMPUTE_TYPE=float16 # Use 'float16' for GPU, 'int8' for CPU
-
-# Diarization Configuration
-DIARIZATION_ENABLED=true
-HUGGINGFACE_TOKEN=your_hf_token_here  # Get from https://huggingface.co/settings/tokens
-MIN_SPEAKERS=1
-MAX_SPEAKERS=5
-
-# Worker Configuration
-POLL_INTERVAL=5  # seconds
-MAX_WORKERS=3
-LOG_LEVEL=INFO
-```
-
-## Usage
-
-### Run the worker
+**Yêu cầu:**
+- Docker Desktop (Windows) với WSL2 backend
+- NVIDIA GPU driver ≥ 530
+- [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) (Windows: tích hợp sẵn trong Docker Desktop)
 
 ```bash
+# 1. Copy và điền thông tin vào .env
+cp .env.example .env
+
+# 2. Build image (lần đầu ~15-20 phút — download PyTorch CUDA ~2GB)
+docker compose build
+
+# 3. Chạy worker
+docker compose up -d
+
+# 4. Xem logs
+docker compose logs -f asr-worker
+
+# 5. Kiểm tra GPU hoạt động
+docker exec py-asr-worker python -c "import torch; print('GPU:', torch.cuda.get_device_name(0))"
+```
+
+> **Lưu ý:** Lần đầu khởi động sẽ tự động download Whisper model `large-v2` (~3GB) và pyannote diarization model (~1GB) vào named volumes. Mất 5–15 phút tùy tốc độ mạng.
+
+---
+
+### Cách 2: Chạy trực tiếp (Windows — môi trường dev)
+
+**Yêu cầu:**
+- Python 3.12
+- CUDA 12.1 + cuDNN 9.x đã cài
+- FFmpeg trong PATH
+
+```bash
+# 1. Tạo virtual environment
+python -m venv venv
+venv\Scripts\activate       # Windows
+# source venv/bin/activate  # Linux/Mac
+
+# 2. Cài PyTorch CUDA 12.1 (PHẢI cài TRƯỚC requirements.txt)
+pip install torch==2.5.1+cu121 torchaudio==2.5.1+cu121 --index-url https://download.pytorch.org/whl/cu121
+
+# 3. Cài các dependency còn lại
+pip install -r requirements.txt
+
+# 4. Setup .env
+cp .env.example .env
+# Điền AWS keys, HuggingFace token, webhook secret vào .env
+
+# 5. Chạy worker
 python src/main.py
 ```
 
-### Run with Docker (optional)
+---
 
-```bash
-docker build -t asr-worker .
-docker run --env-file .env asr-worker
+## Cấu hình quan trọng (`.env`)
+
+```env
+# AWS
+AWS_ACCESS_KEY_ID=...
+AWS_SECRET_ACCESS_KEY=...
+AWS_REGION=ap-southeast-1
+AWS_S3_BUCKET=amzn-s3-oratorai
+AWS_SQS_ASR_QUEUE_URL=https://sqs.ap-southeast-1.amazonaws.com/.../oratorai-asr-queue
+AWS_SQS_ANALYST_QUEUE_URL=https://sqs.ap-southeast-1.amazonaws.com/.../oratorai-analysis-queue
+
+# Webhook về Node API
+NODE_API_URL=https://your-node-api.app     # KHÔNG có trailing slash
+WEBHOOK_ENDPOINT=/api/v1/webhooks/asr-complete
+WEBHOOK_SECRET=your_webhook_secret
+
+# ASR — Whisper
+WHISPER_MODEL=large-v2
+WHISPER_DEVICE=cuda
+# Chọn compute type phù hợp với VRAM:
+#   int8       → ~1.5GB VRAM — dùng cho GPU 6GB (GTX 1660 Ti)
+#   float16    → ~3.0GB VRAM — dùng cho GPU ≥8GB (RTX 3060+)
+WHISPER_COMPUTE_TYPE=int8
+BEAM_SIZE=5                                 # Không tăng lên >5 để tránh OOM trên 6GB VRAM
+
+# Diarization
+DIARIZATION_ENABLED=true
+HUGGINGFACE_TOKEN=hf_...                    # Lấy tại: huggingface.co/settings/tokens
+DIARIZATION_MODEL=pyannote/speaker-diarization-3.1
 ```
 
-## Development
+---
 
-### Run tests
+## Format dữ liệu
 
-```bash
-pytest tests/
-```
-
-### Run with hot reload
-
-```bash
-watchmedo auto-restart --directory=./src --pattern=*.py --recursive -- python src/main.py
-```
-
-## Message Format
-
-### Input (from SQS Queue)
+### Input — SQS Message
 
 ```json
 {
   "jobId": 123,
   "presentationId": 456,
-  "audioUrl": "https://s3.amazonaws.com/bucket/presentations/456/audio.mp3",
-  "timestamp": "2026-01-22T10:30:00Z"
+  "audioUrl": "s3://amzn-s3-oratorai/presentations/456/audio.mp3",
+  "metadata": {}
 }
 ```
 
-### Output (to Node API Webhook)
+### Output — Webhook về Node API
 
 ```json
 {
   "jobId": 123,
   "presentationId": 456,
-  "status": "success",
-  "transcript": "Full transcription text...",
-  "segments": [
+  "status": "completed",
+  "transcript": [
     {
-      "text": "Hello everyone",
-      "startTime": 0.5,
-      "endTime": 2.3,
+      "id": 1,
+      "text": "Xin chào mọi người",
+      "start": 0.5,
+      "end": 2.3,
       "speakerLabel": "SPEAKER_00",
       "confidence": 0.95
     }
   ],
-  "diarization": [
+  "speakers": [
     {
-      "aiSpeakerLabel": "SPEAKER_00",
+      "speakerLabel": "SPEAKER_00",
       "totalDuration": 120.5,
       "segmentCount": 15,
-      "confidence": 0.92
-    },
-    {
-      "aiSpeakerLabel": "SPEAKER_01",
-      "totalDuration": 85.3,
-      "segmentCount": 12,
-      "confidence": 0.88
+      "confidence": 0.92,
+      "percentage": 65.0
     }
   ],
   "metadata": {
-    "language": "vi",
-    "duration": 205.8,
-    "audioFormat": "mp3",
+    "audioDuration": 205.8,
+    "whisperModel": "large-v2",
+    "whisperLanguage": "vi",
+    "diarizationEnabled": true,
     "processingTime": 45.2
   }
 }
 ```
 
+---
+
 ## Error Handling
 
-- Automatic retry on failure (max 3 attempts)
-- Failed jobs sent to DLQ (Dead Letter Queue)
-- Error logging to CloudWatch
-- Webhook notification on failure
+- **Retry tự động** — tối đa 3 lần (cấu hình `MAX_RETRIES`)
+- **Message không bị xóa** nếu lỗi → SQS tự requeue sau `VISIBILITY_TIMEOUT` giây
+- **Webhook thất bại** — gửi payload `status: "failed"` về Node API
+- **Log file** — lưu tại `logs/asr-worker.log` (rotate tự động)
 
-## Monitoring
+---
 
-- CloudWatch Logs for application logs
-- CloudWatch Metrics for processing metrics
-- SQS metrics (messages in queue, processing time)
+## Kiểm tra GPU
 
-## Contributing
+```bash
+# Kiểm tra CUDA có khả dụng không
+python -c "import torch; print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0))"
 
-1. Create feature branch
-2. Write tests
-3. Submit pull request
+# Kiểm tra VRAM còn trống
+python -c "import torch; print(f'Free VRAM: {torch.cuda.mem_get_info()[0]/1024**3:.1f} GB')"
+```
 
-## License
+---
 
-MIT
+## Lệnh Docker hữu ích
 
-## Contact
+```bash
+# Xem trạng thái container
+docker compose ps
 
-Orator AI Team
+# Restart worker
+docker compose restart asr-worker
+
+# Xem log realtime
+docker compose logs -f asr-worker
+
+# Xóa tất cả messages trong queue (dev)
+python purge_queue.py
+
+# Dừng worker
+docker compose down
+```
