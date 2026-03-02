@@ -1,9 +1,10 @@
-version: "3.8"
+# docker-compose.yml
+# "version" field is deprecated in Compose v2+ — removed intentionally
 
 services:
-  # =============================================================================
+  # ===========================================================================
   # ASR Worker Service
-  # =============================================================================
+  # ===========================================================================
   asr-worker:
     build:
       context: .
@@ -11,29 +12,23 @@ services:
     container_name: py-asr-worker
     restart: unless-stopped
 
-    # GPU support (requires nvidia-docker2)
-    runtime: nvidia
-    environment:
-      - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-
-    # Environment variables (override with .env file)
+    # Environment variables
     env_file:
       - .env
 
     # Volume mounts
     volumes:
-      # Application code (for development hot-reload)
+      # Application code (development hot-reload — remove in production)
       - ./src:/app/src:ro
-      # Logs directory
+      # Logs
       - ./logs:/app/logs
-      # Model cache (persist downloaded models)
+      # Model cache (persist downloaded models across restarts)
       - asr-models:/app/models
       - huggingface-cache:/home/asrworker/.cache/huggingface
-      # Temporary files
-      - /tmp/asr-worker:/tmp/asr-worker
+      # Temporary audio files (named volume — portable trên Windows Docker Desktop)
+      - asr-temp:/tmp/asr-worker
 
-    # Resource limits
+    # GPU + Resource limits — using Compose v2 standard syntax
     deploy:
       resources:
         limits:
@@ -42,16 +37,20 @@ services:
         reservations:
           cpus: "2"
           memory: 4G
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
 
     # Health check
     healthcheck:
-      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      test: ["CMD", "python", "-c", "import torch; assert torch.cuda.is_available(); import sys; sys.exit(0)"]
       interval: 30s
-      timeout: 10s
+      timeout: 30s
       retries: 3
-      start_period: 60s
+      start_period: 120s
 
-    # Logging configuration
+    # Logging
     logging:
       driver: "json-file"
       options:
@@ -62,15 +61,16 @@ services:
     networks:
       - asr-network
 
-  # =============================================================================
-  # Optional: LocalStack for AWS services (development only)
-  # =============================================================================
+  # ===========================================================================
+  # Optional: LocalStack for local development (AWS S3 + SQS mock)
+  # Run with: docker compose --profile dev up
+  # ===========================================================================
   localstack:
     image: localstack/localstack:latest
     container_name: localstack-asr
     ports:
-      - "4566:4566" # LocalStack gateway
-      - "4510-4559:4510-4559" # External services
+      - "4566:4566"
+      - "4510-4559:4510-4559"
     environment:
       - SERVICES=s3,sqs
       - DEBUG=1
@@ -85,18 +85,15 @@ services:
       - dev
 
 # =============================================================================
-# Volumes
+# Named Volumes
 # =============================================================================
 volumes:
-  # Persist Whisper and pyannote models
   asr-models:
     driver: local
-
-  # Persist HuggingFace cache
   huggingface-cache:
     driver: local
-
-  # LocalStack data (development only)
+  asr-temp:
+    driver: local
   localstack-data:
     driver: local
 

@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     # ========================================
     NODE_API_URL: str = Field(default="http://localhost:8080", description="Node API base URL")
     WEBHOOK_SECRET: str = Field(..., description="Webhook authentication secret")
-    WEBHOOK_ENDPOINT: str = Field(default="/api/v1/webhooks/asr-complete", description="Webhook endpoint")
+    WEBHOOK_ENDPOINT: str = Field(default="/api/v1/webhooks/asr-complete", description="Webhook endpoint path (must start with /)")
     
     # ========================================
     # ASR Configuration
@@ -99,7 +99,7 @@ class Settings(BaseSettings):
     # Performance Tuning
     # ========================================
     CHUNK_SIZE: int = Field(default=8192, description="File download chunk size (bytes)")
-    TEMP_DIR: str = Field(default="temp", description="Temporary files directory")
+    TEMP_DIR: str = Field(default="/tmp/asr-worker", description="Temporary files directory")
     CLEANUP_TEMP_FILES: bool = Field(default=True, description="Clean up temp files after processing")
     
     MAX_AUDIO_LENGTH: int = Field(default=3600, description="Max audio length (seconds)")
@@ -123,8 +123,10 @@ class Settings(BaseSettings):
     
     @property
     def webhook_url(self) -> str:
-        """Get full webhook URL"""
-        return f"{self.NODE_API_URL}{self.WEBHOOK_ENDPOINT}"
+        """Get full webhook URL — safe against trailing/leading slash mismatch"""
+        base = self.NODE_API_URL.rstrip("/")
+        endpoint = self.WEBHOOK_ENDPOINT if self.WEBHOOK_ENDPOINT.startswith("/") else f"/{self.WEBHOOK_ENDPOINT}"
+        return f"{base}{endpoint}"
 
 
 # Global settings instance
