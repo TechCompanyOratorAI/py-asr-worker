@@ -2,6 +2,10 @@
 """Purge SQS queue to remove old jobs"""
 import boto3
 import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Get credentials from environment
 AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
