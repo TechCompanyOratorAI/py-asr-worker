@@ -187,11 +187,46 @@ class DiarizationService:
             torch.load = patched_torch_load
             
             try:
-                # Load pipeline - try different auth parameter names
-                # for compatibility with different pyannote.audio versions
+                # ── Compatibility patch ──────────────────────────────
+                # Old pyannote.audio internally passes use_auth_token
+                # to huggingface_hub, but newer huggingface_hub removed
+                # that param. Patch hf_hub functions to translate
+                # use_auth_token → token so ALL version combos work.
+                import huggingface_hub as _hf_hub
+                
+                _original_hf_download = _hf_hub.hf_hub_download
+                _original_hf_model_info = getattr(_hf_hub, 'model_info', None)
+                
+                def _patched_hf_download(*args, **kwargs):
+                    if 'use_auth_token' in kwargs:
+                        kwargs['token'] = kwargs.pop('use_auth_token')
+                    return _original_hf_download(*args, **kwargs)
+                
+                def _patched_model_info(*args, **kwargs):
+                    if 'use_auth_token' in kwargs:
+                        kwargs['token'] = kwargs.pop('use_auth_token')
+                    return _original_hf_model_info(*args, **kwargs)
+                
+                _hf_hub.hf_hub_download = _patched_hf_download
+                if _original_hf_model_info is not None:
+                    _hf_hub.model_info = _patched_model_info
+                
+                # Also patch the cached_download if it exists (very old versions)
+                _original_cached = getattr(_hf_hub, 'cached_download', None)
+                if _original_cached is not None:
+                    def _patched_cached(*args, **kwargs):
+                        if 'use_auth_token' in kwargs:
+                            kwargs['token'] = kwargs.pop('use_auth_token')
+                        return _original_cached(*args, **kwargs)
+                    _hf_hub.cached_download = _patched_cached
+                
+                logger.info("   - Applied huggingface_hub compatibility patches")
+                # ─────────────────────────────────────────────────────
+                
+                # Load pipeline - try 'use_auth_token' first, then 'token'
                 pipeline_loaded = False
                 
-                # Try 'use_auth_token' first (older pyannote versions)
+                # Try 'use_auth_token' (older pyannote versions)
                 try:
                     self.pipeline = Pipeline.from_pretrained(
                         self.model_name,
@@ -216,9 +251,15 @@ class DiarizationService:
                 
                 # Last resort: no auth parameter
                 if not pipeline_loaded:
-                    logger.warning("   - ⚠️ Loading without auth token")
+                    logger.warning("   - ⚠️ Loading without explicit auth token")
                     self.pipeline = Pipeline.from_pretrained(self.model_name)
             finally:
+                # Restore original huggingface_hub functions
+                _hf_hub.hf_hub_download = _original_hf_download
+                if _original_hf_model_info is not None:
+                    _hf_hub.model_info = _original_hf_model_info
+                if _original_cached is not None:
+                    _hf_hub.cached_download = _original_cached
                 # Restore original torch.load
                 torch.load = original_torch_load
             
