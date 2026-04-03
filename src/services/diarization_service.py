@@ -176,9 +176,8 @@ class DiarizationService:
             original_torch_load = torch.load
             
             def patched_torch_load(*args, **kwargs):
-                """Patch torch.load to use weights_only=False for compatibility"""
-                if 'weights_only' not in kwargs:
-                    kwargs['weights_only'] = False
+                """Patch torch.load to ALWAYS use weights_only=False for compatibility"""
+                kwargs['weights_only'] = False
                 with warnings.catch_warnings():
                     warnings.filterwarnings('ignore', category=FutureWarning)
                     return original_torch_load(*args, **kwargs)
