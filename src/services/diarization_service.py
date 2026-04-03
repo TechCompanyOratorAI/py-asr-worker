@@ -190,7 +190,7 @@ class DiarizationService:
                 # Load pipeline
                 self.pipeline = Pipeline.from_pretrained(
                     self.model_name,
-                    use_auth_token=self.hf_token
+                    token=self.hf_token
                 )
             finally:
                 # Restore original torch.load
