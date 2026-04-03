@@ -187,84 +187,89 @@ class DiarizationService:
             torch.load = patched_torch_load
             
             try:
-                # ── Compatibility patch ──────────────────────────────
-                # Old pyannote.audio internally does:
-                #   from huggingface_hub import hf_hub_download
-                #   hf_hub_download(..., use_auth_token=...)
-                # But newer huggingface_hub removed use_auth_token.
-                #
-                # We MUST patch the reference INSIDE pyannote's module,
-                # not just on huggingface_hub, because pyannote already
-                # imported it into its own namespace.
-                import huggingface_hub as _hf_hub
+                # ── Authentication ───────────────────────────────────
+                # Use huggingface_hub.login() to establish a global auth
+                # session. This is the MOST RELIABLE way across all
+                # versions of huggingface_hub and pyannote.audio.
+                # It stores the token globally so ALL internal calls
+                # (hf_hub_download, model_info, etc.) pick it up
+                # automatically — no need for use_auth_token or token param.
+                if self.hf_token:
+                    import huggingface_hub as _hf_hub
+                    
+                    # Set HF_TOKEN env var (newer huggingface_hub reads this)
+                    os.environ['HF_TOKEN'] = self.hf_token
+                    os.environ['HUGGING_FACE_HUB_TOKEN'] = self.hf_token
+                    
+                    # Also login via API (works across all versions)
+                    try:
+                        _hf_hub.login(token=self.hf_token, add_to_git_credential=False)
+                        logger.info("   - HuggingFace login successful")
+                    except TypeError:
+                        # Older version might not have add_to_git_credential
+                        try:
+                            _hf_hub.login(token=self.hf_token)
+                            logger.info("   - HuggingFace login successful (legacy)")
+                        except Exception as login_err:
+                            logger.warning(f"   - HuggingFace login failed: {login_err}")
+                            logger.warning("   - Will try with env var fallback")
+                    except Exception as login_err:
+                        logger.warning(f"   - HuggingFace login failed: {login_err}")
+                        logger.warning("   - Will try with env var fallback")
+                else:
+                    logger.warning("   - ⚠️ No HUGGINGFACE_TOKEN set")
+                # ─────────────────────────────────────────────────────
                 
-                # Keep track of all patches for cleanup
+                # ── Compatibility patch for use_auth_token → token ───
+                import huggingface_hub as _hf_hub
                 _patches = {}
                 
                 def _make_patched(original_fn):
-                    """Create a wrapper that converts use_auth_token → token"""
+                    """Convert use_auth_token → token for newer huggingface_hub"""
                     def _patched(*args, **kwargs):
                         if 'use_auth_token' in kwargs:
                             kwargs['token'] = kwargs.pop('use_auth_token')
                         return original_fn(*args, **kwargs)
                     return _patched
                 
-                # Patch on huggingface_hub module
+                # Patch huggingface_hub module
                 for attr in ('hf_hub_download', 'model_info', 'cached_download'):
                     original = getattr(_hf_hub, attr, None)
                     if original is not None:
-                        _patches[('huggingface_hub', attr)] = (_hf_hub, attr, original)
+                        _patches[('hf_hub', attr)] = (_hf_hub, attr, original)
                         setattr(_hf_hub, attr, _make_patched(original))
                 
-                # Patch DIRECTLY on pyannote.audio.core.pipeline module
-                # This is critical because pyannote does:
-                #   from huggingface_hub import hf_hub_download
-                # which creates a LOCAL reference that our huggingface_hub
-                # patch does NOT affect.
-                try:
-                    import pyannote.audio.core.pipeline as _pyannote_pipeline
-                    for attr in ('hf_hub_download', 'model_info', 'cached_download'):
-                        original = getattr(_pyannote_pipeline, attr, None)
-                        if original is not None:
-                            _patches[('pyannote.pipeline', attr)] = (_pyannote_pipeline, attr, original)
-                            setattr(_pyannote_pipeline, attr, _make_patched(original))
-                except ImportError:
-                    pass
-                
-                # Also patch pyannote.audio.core.model if it exists
-                try:
-                    import pyannote.audio.core.model as _pyannote_model
-                    for attr in ('hf_hub_download', 'model_info', 'cached_download'):
-                        original = getattr(_pyannote_model, attr, None)
-                        if original is not None:
-                            _patches[('pyannote.model', attr)] = (_pyannote_model, attr, original)
-                            setattr(_pyannote_model, attr, _make_patched(original))
-                except ImportError:
-                    pass
+                # Patch pyannote's local references
+                for mod_name in ('pyannote.audio.core.pipeline', 'pyannote.audio.core.model'):
+                    try:
+                        import importlib
+                        _mod = importlib.import_module(mod_name)
+                        for attr in ('hf_hub_download', 'model_info', 'cached_download'):
+                            original = getattr(_mod, attr, None)
+                            if original is not None:
+                                _patches[(mod_name, attr)] = (_mod, attr, original)
+                                setattr(_mod, attr, _make_patched(original))
+                    except ImportError:
+                        pass
                 
                 logger.info(f"   - Applied {len(_patches)} compatibility patches")
                 # ─────────────────────────────────────────────────────
                 
-                # Load pipeline with token
-                self.pipeline = Pipeline.from_pretrained(
-                    self.model_name,
-                    use_auth_token=self.hf_token
-                )
+                # Load pipeline (token comes from login session + env var)
+                self.pipeline = Pipeline.from_pretrained(self.model_name)
                 
                 # Pipeline.from_pretrained returns None if download fails
-                # (e.g. gated model without valid token)
                 if self.pipeline is None:
                     token_status = "SET" if self.hf_token else "NOT SET"
                     raise ModelLoadError(
                         f"Pipeline.from_pretrained returned None. "
-                        f"Model '{self.model_name}' is gated and requires authentication. "
+                        f"Model '{self.model_name}' is gated. "
                         f"HUGGINGFACE_TOKEN is {token_status}. "
-                        f"Steps to fix: "
-                        f"1) Create a token at https://hf.co/settings/tokens "
-                        f"2) Accept license at https://hf.co/{self.model_name} "
-                        f"3) Set HUGGINGFACE_TOKEN in .env",
+                        f"Steps: 1) Visit https://hf.co/{self.model_name} and accept license "
+                        f"2) Also accept https://hf.co/pyannote/segmentation-3.0 "
+                        f"3) Verify token at https://hf.co/settings/tokens",
                         model_name=self.model_name,
-                        details={"hint": "HUGGINGFACE_TOKEN missing or invalid, or model license not accepted"}
+                        details={"hint": "Accept BOTH model licenses on HuggingFace"}
                     )
                 
                 logger.info("   - Pipeline loaded successfully")
