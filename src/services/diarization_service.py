@@ -188,80 +188,76 @@ class DiarizationService:
             
             try:
                 # ── Compatibility patch ──────────────────────────────
-                # Old pyannote.audio internally passes use_auth_token
-                # to huggingface_hub, but newer huggingface_hub removed
-                # that param. Patch hf_hub functions to translate
-                # use_auth_token → token so ALL version combos work.
+                # Old pyannote.audio internally does:
+                #   from huggingface_hub import hf_hub_download
+                #   hf_hub_download(..., use_auth_token=...)
+                # But newer huggingface_hub removed use_auth_token.
+                #
+                # We MUST patch the reference INSIDE pyannote's module,
+                # not just on huggingface_hub, because pyannote already
+                # imported it into its own namespace.
                 import huggingface_hub as _hf_hub
                 
-                _original_hf_download = _hf_hub.hf_hub_download
-                _original_hf_model_info = getattr(_hf_hub, 'model_info', None)
+                # Keep track of all patches for cleanup
+                _patches = {}
                 
-                def _patched_hf_download(*args, **kwargs):
-                    if 'use_auth_token' in kwargs:
-                        kwargs['token'] = kwargs.pop('use_auth_token')
-                    return _original_hf_download(*args, **kwargs)
-                
-                def _patched_model_info(*args, **kwargs):
-                    if 'use_auth_token' in kwargs:
-                        kwargs['token'] = kwargs.pop('use_auth_token')
-                    return _original_hf_model_info(*args, **kwargs)
-                
-                _hf_hub.hf_hub_download = _patched_hf_download
-                if _original_hf_model_info is not None:
-                    _hf_hub.model_info = _patched_model_info
-                
-                # Also patch the cached_download if it exists (very old versions)
-                _original_cached = getattr(_hf_hub, 'cached_download', None)
-                if _original_cached is not None:
-                    def _patched_cached(*args, **kwargs):
+                def _make_patched(original_fn):
+                    """Create a wrapper that converts use_auth_token → token"""
+                    def _patched(*args, **kwargs):
                         if 'use_auth_token' in kwargs:
                             kwargs['token'] = kwargs.pop('use_auth_token')
-                        return _original_cached(*args, **kwargs)
-                    _hf_hub.cached_download = _patched_cached
+                        return original_fn(*args, **kwargs)
+                    return _patched
                 
-                logger.info("   - Applied huggingface_hub compatibility patches")
-                # ─────────────────────────────────────────────────────
+                # Patch on huggingface_hub module
+                for attr in ('hf_hub_download', 'model_info', 'cached_download'):
+                    original = getattr(_hf_hub, attr, None)
+                    if original is not None:
+                        _patches[('huggingface_hub', attr)] = (_hf_hub, attr, original)
+                        setattr(_hf_hub, attr, _make_patched(original))
                 
-                # Load pipeline - try 'use_auth_token' first, then 'token'
-                pipeline_loaded = False
-                
-                # Try 'use_auth_token' (older pyannote versions)
+                # Patch DIRECTLY on pyannote.audio.core.pipeline module
+                # This is critical because pyannote does:
+                #   from huggingface_hub import hf_hub_download
+                # which creates a LOCAL reference that our huggingface_hub
+                # patch does NOT affect.
                 try:
-                    self.pipeline = Pipeline.from_pretrained(
-                        self.model_name,
-                        use_auth_token=self.hf_token
-                    )
-                    pipeline_loaded = True
-                    logger.info("   - Loaded with use_auth_token parameter")
-                except TypeError:
+                    import pyannote.audio.core.pipeline as _pyannote_pipeline
+                    for attr in ('hf_hub_download', 'model_info', 'cached_download'):
+                        original = getattr(_pyannote_pipeline, attr, None)
+                        if original is not None:
+                            _patches[('pyannote.pipeline', attr)] = (_pyannote_pipeline, attr, original)
+                            setattr(_pyannote_pipeline, attr, _make_patched(original))
+                except ImportError:
                     pass
                 
-                # Try 'token' (newer pyannote versions)
-                if not pipeline_loaded:
-                    try:
-                        self.pipeline = Pipeline.from_pretrained(
-                            self.model_name,
-                            token=self.hf_token
-                        )
-                        pipeline_loaded = True
-                        logger.info("   - Loaded with token parameter")
-                    except TypeError:
-                        pass
+                # Also patch pyannote.audio.core.model if it exists
+                try:
+                    import pyannote.audio.core.model as _pyannote_model
+                    for attr in ('hf_hub_download', 'model_info', 'cached_download'):
+                        original = getattr(_pyannote_model, attr, None)
+                        if original is not None:
+                            _patches[('pyannote.model', attr)] = (_pyannote_model, attr, original)
+                            setattr(_pyannote_model, attr, _make_patched(original))
+                except ImportError:
+                    pass
                 
-                # Last resort: no auth parameter
-                if not pipeline_loaded:
-                    logger.warning("   - ⚠️ Loading without explicit auth token")
-                    self.pipeline = Pipeline.from_pretrained(self.model_name)
+                logger.info(f"   - Applied {len(_patches)} compatibility patches")
+                # ─────────────────────────────────────────────────────
+                
+                # Load pipeline with token
+                self.pipeline = Pipeline.from_pretrained(
+                    self.model_name,
+                    use_auth_token=self.hf_token
+                )
+                logger.info("   - Pipeline loaded successfully")
             finally:
-                # Restore original huggingface_hub functions
-                _hf_hub.hf_hub_download = _original_hf_download
-                if _original_hf_model_info is not None:
-                    _hf_hub.model_info = _original_hf_model_info
-                if _original_cached is not None:
-                    _hf_hub.cached_download = _original_cached
+                # Restore ALL patched functions
+                for key, (module, attr, original) in _patches.items():
+                    setattr(module, attr, original)
                 # Restore original torch.load
                 torch.load = original_torch_load
+
             
             # Move to device if CUDA available (always try for diarization)
             try:
