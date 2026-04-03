@@ -250,6 +250,23 @@ class DiarizationService:
                     self.model_name,
                     use_auth_token=self.hf_token
                 )
+                
+                # Pipeline.from_pretrained returns None if download fails
+                # (e.g. gated model without valid token)
+                if self.pipeline is None:
+                    token_status = "SET" if self.hf_token else "NOT SET"
+                    raise ModelLoadError(
+                        f"Pipeline.from_pretrained returned None. "
+                        f"Model '{self.model_name}' is gated and requires authentication. "
+                        f"HUGGINGFACE_TOKEN is {token_status}. "
+                        f"Steps to fix: "
+                        f"1) Create a token at https://hf.co/settings/tokens "
+                        f"2) Accept license at https://hf.co/{self.model_name} "
+                        f"3) Set HUGGINGFACE_TOKEN in .env",
+                        model_name=self.model_name,
+                        details={"hint": "HUGGINGFACE_TOKEN missing or invalid, or model license not accepted"}
+                    )
+                
                 logger.info("   - Pipeline loaded successfully")
             finally:
                 # Restore ALL patched functions
