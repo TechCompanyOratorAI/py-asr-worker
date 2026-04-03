@@ -187,11 +187,37 @@ class DiarizationService:
             torch.load = patched_torch_load
             
             try:
-                # Load pipeline
-                self.pipeline = Pipeline.from_pretrained(
-                    self.model_name,
-                    token=self.hf_token
-                )
+                # Load pipeline - try different auth parameter names
+                # for compatibility with different pyannote.audio versions
+                pipeline_loaded = False
+                
+                # Try 'use_auth_token' first (older pyannote versions)
+                try:
+                    self.pipeline = Pipeline.from_pretrained(
+                        self.model_name,
+                        use_auth_token=self.hf_token
+                    )
+                    pipeline_loaded = True
+                    logger.info("   - Loaded with use_auth_token parameter")
+                except TypeError:
+                    pass
+                
+                # Try 'token' (newer pyannote versions)
+                if not pipeline_loaded:
+                    try:
+                        self.pipeline = Pipeline.from_pretrained(
+                            self.model_name,
+                            token=self.hf_token
+                        )
+                        pipeline_loaded = True
+                        logger.info("   - Loaded with token parameter")
+                    except TypeError:
+                        pass
+                
+                # Last resort: no auth parameter
+                if not pipeline_loaded:
+                    logger.warning("   - ⚠️ Loading without auth token")
+                    self.pipeline = Pipeline.from_pretrained(self.model_name)
             finally:
                 # Restore original torch.load
                 torch.load = original_torch_load
