@@ -150,7 +150,7 @@ AWS_SECRET_ACCESS_KEY=...
 AWS_REGION=ap-southeast-1
 AWS_S3_BUCKET=amzn-s3-oratorai
 AWS_SQS_ASR_QUEUE_URL=https://sqs.ap-southeast-1.amazonaws.com/.../oratorai-asr-queue
-AWS_SQS_ANALYST_QUEUE_URL=https://sqs.ap-southeast-1.amazonaws.com/.../oratorai-analysis-queue
+AWS_SQS_SEMANTIC_QUEUE_URL=https://sqs.ap-southeast-1.amazonaws.com/.../oratorai-semantic-queue
 
 # Webhook về Node API
 NODE_API_URL=https://your-node-api.app     # KHÔNG có trailing slash
