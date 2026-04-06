@@ -52,7 +52,7 @@ class SQSService:
     def __init__(self):
         """Initialize SQS client"""
         self.queue_url = settings.AWS_SQS_ASR_QUEUE_URL
-        self.analyst_queue_url = settings.AWS_SQS_ANALYST_QUEUE_URL
+        self.semantic_queue_url = settings.AWS_SQS_SEMANTIC_QUEUE_URL
         
         if not self.queue_url:
             raise ConfigurationError(
@@ -71,7 +71,7 @@ class SQSService:
             
             logger.info("✅ SQS client initialized")
             logger.info(f"   - ASR Queue URL: {self.queue_url}")
-            logger.info(f"   - Analyst Queue URL: {self.analyst_queue_url}")
+            logger.info(f"   - Semantic Queue URL: {self.semantic_queue_url}")
             logger.info(f"   - Region: {settings.AWS_REGION}")
             logger.info(f"   - Max messages: {settings.MAX_MESSAGES}")
             logger.info(f"   - Wait time: {settings.WAIT_TIME_SECONDS}s")
@@ -274,14 +274,14 @@ class SQSService:
     def send_message(
         self,
         message_body: Dict[str, Any],
-        queue_type: str = "analyst"
+        queue_type: str = "semantic"
     ) -> bool:
         """
         Send message to SQS queue
         
         Args:
             message_body: Message payload (will be JSON serialized)
-            queue_type: Queue type - "asr" or "analyst" (default: "analyst")
+            queue_type: Queue type - "asr" or "semantic" (default: "semantic")
             
         Returns:
             True if sent successfully
@@ -291,12 +291,12 @@ class SQSService:
         """
         try:
             # Select queue URL based on type
-            if queue_type == "analyst":
-                target_queue_url = self.analyst_queue_url
+            if queue_type == "semantic":
+                target_queue_url = self.semantic_queue_url
             elif queue_type == "asr":
                 target_queue_url = self.queue_url
             else:
-                raise ValueError(f"Invalid queue_type: {queue_type}. Must be 'asr' or 'analyst'")
+                raise ValueError(f"Invalid queue_type: {queue_type}. Must be 'asr' or 'semantic'")
             
             logger.info(f"📤 Sending message to {queue_type} queue...")
             logger.debug(f"   - Queue URL: {target_queue_url}")
