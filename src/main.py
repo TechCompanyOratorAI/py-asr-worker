@@ -23,6 +23,7 @@ import sys
 import signal
 import time
 from typing import Optional, Dict, Any
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Add NVIDIA cuDNN/cuBLAS to PATH and environment variables for GPU acceleration
 try:
@@ -132,7 +133,7 @@ class ASRWorker:
             sys.exit(1)
     
     def _initialize_services(self):
-        """Initialize all services"""
+        """Initialize all services and preload AI models"""
         try:
             logger.info("🔧 Initializing services...")
             
@@ -148,11 +149,11 @@ class ASRWorker:
             self.audio_processor = get_audio_processor()
             logger.info("   ✅ Audio Processor ready")
             
-            # ASR Service (lazy load model)
+            # ASR Service
             self.asr_service = get_asr_service()
             logger.info("   ✅ ASR Service ready")
             
-            # Diarization Service (lazy load model)
+            # Diarization Service
             if settings.DIARIZATION_ENABLED:
                 self.diarization_service = get_diarization_service()
                 logger.info("   ✅ Diarization Service ready")
@@ -163,7 +164,18 @@ class ASRWorker:
             self.webhook_service = get_webhook_service()
             logger.info("   ✅ Webhook Service ready")
             
-            logger.info("✅ All services initialized successfully")
+            # ── Preload AI models at startup ──────────────────────────
+            # Eliminates ~10-20s cold-start latency on the first job.
+            logger.info("🔄 Preloading AI models (this may take a moment)...")
+            
+            self.asr_service.load_model()
+            logger.info("   ✅ Whisper model preloaded to GPU")
+            
+            if settings.DIARIZATION_ENABLED and self.diarization_service:
+                self.diarization_service.load_pipeline()
+                logger.info("   ✅ Diarization pipeline preloaded to GPU")
+            
+            logger.info("✅ All services initialized and models preloaded")
             
         except Exception as e:
             logger.error(f"❌ Failed to initialize services: {e}", exc_info=True)
@@ -307,7 +319,7 @@ class ASRWorker:
         temp_files: list
     ) -> Dict[str, Any]:
         """
-        Process ASR job pipeline
+        Process ASR job pipeline (optimized with parallel ASR + Diarization)
         
         Args:
             job_id: Job ID
@@ -320,17 +332,17 @@ class ASRWorker:
             Dictionary with transcript, speakers, and metadata
         """
         # Step 1: Download audio from S3
-        logger.info(f"📥 Step 1/6: Downloading audio from S3...")
+        logger.info(f"📥 Step 1/5: Downloading audio from S3...")
         audio_path = self.s3_service.download_file(
             s3_url=audio_url,
             local_dir=settings.TEMP_DIR
         )
         temp_files.append(audio_path)
         
-        # Step 2: Validate and normalize audio
-        logger.info(f"🎵 Step 2/6: Validating and normalizing audio...")
+        # Step 2: Validate and normalize audio (consolidated)
+        logger.info(f"🎵 Step 2/5: Validating and normalizing audio...")
         
-        # Validate audio
+        # Quick validation (file exists, extension, size)
         is_valid, errors = self.audio_processor.validate_audio(audio_path)
         if not is_valid:
             raise AudioProcessingError(
@@ -339,13 +351,7 @@ class ASRWorker:
                 details={'validation_errors': errors}
             )
         
-        # Get audio info
-        audio_info = self.audio_processor.get_audio_info(audio_path)
-        logger.info(f"   - Duration: {audio_info['duration']:.2f}s")
-        logger.info(f"   - Sample rate: {audio_info['sample_rate']} Hz")
-        logger.info(f"   - Channels: {audio_info['channels']}")
-        
-        # Normalize audio for ASR
+        # Normalize audio for ASR (16kHz mono WAV)
         normalized_path = self.audio_processor.normalize_audio(
             input_path=audio_path,
             output_dir=settings.TEMP_DIR,
@@ -354,26 +360,41 @@ class ASRWorker:
         )
         temp_files.append(normalized_path)
         
-        # Step 3: ASR Transcription
-        logger.info(f"🎤 Step 3/6: Running ASR transcription...")
-        transcript_segments = self.asr_service.transcribe(
-            audio_path=normalized_path,
-            language=settings.WHISPER_LANGUAGE,
-            beam_size=settings.BEAM_SIZE,
-            vad_filter=settings.VAD_FILTER
-        )
+        # Get audio info from normalized file (single ffprobe call)
+        audio_info = self.audio_processor.get_audio_info(normalized_path)
+        logger.info(f"   - Duration: {audio_info['duration']:.2f}s")
+        logger.info(f"   - Sample rate: {audio_info['sample_rate']} Hz")
         
-        # Step 4: Speaker Diarization
+        # Step 3: ASR + Diarization (PARALLEL) ⚡
         if settings.DIARIZATION_ENABLED and self.diarization_service:
-            logger.info(f"👥 Step 4/6: Running speaker diarization...")
-            diarization_segments = self.diarization_service.diarize(
-                audio_path=normalized_path,
-                min_speakers=settings.MIN_SPEAKERS,
-                max_speakers=settings.MAX_SPEAKERS
-            )
+            logger.info(f"⚡ Step 3/5: Running ASR + Diarization in PARALLEL...")
+            parallel_start = time.time()
             
-            # Step 5: Merge transcript with diarization
-            logger.info(f"🔗 Step 5/6: Merging transcript with speakers...")
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                # Submit both tasks simultaneously
+                asr_future = executor.submit(
+                    self.asr_service.transcribe,
+                    audio_path=normalized_path,
+                    language=settings.WHISPER_LANGUAGE,
+                    beam_size=settings.BEAM_SIZE,
+                    vad_filter=settings.VAD_FILTER
+                )
+                diarization_future = executor.submit(
+                    self.diarization_service.diarize,
+                    audio_path=normalized_path,
+                    min_speakers=settings.MIN_SPEAKERS,
+                    max_speakers=settings.MAX_SPEAKERS
+                )
+                
+                # Wait for both to complete
+                transcript_segments = asr_future.result()
+                diarization_segments = diarization_future.result()
+            
+            parallel_time = time.time() - parallel_start
+            logger.info(f"   ⚡ Parallel ASR+Diarization completed in {parallel_time:.2f}s")
+            
+            # Step 4: Merge transcript with diarization
+            logger.info(f"🔗 Step 4/5: Merging transcript with speakers...")
             merged_segments = self.diarization_service.merge_with_transcript(
                 transcript_segments=transcript_segments,
                 diarization_segments=diarization_segments,
@@ -384,8 +405,16 @@ class ASRWorker:
             speakers_info = self.diarization_service.get_speaker_info(merged_segments)
             
         else:
-            # No diarization - assign UNKNOWN speaker
-            logger.warning(f"⚠️ Step 4-5/6: Diarization disabled - assigning UNKNOWN speaker")
+            # No diarization - run ASR only
+            logger.info(f"🎤 Step 3/5: Running ASR transcription (diarization disabled)...")
+            transcript_segments = self.asr_service.transcribe(
+                audio_path=normalized_path,
+                language=settings.WHISPER_LANGUAGE,
+                beam_size=settings.BEAM_SIZE,
+                vad_filter=settings.VAD_FILTER
+            )
+            
+            logger.warning(f"⚠️ Step 4/5: Diarization disabled - assigning UNKNOWN speaker")
             
             from services.diarization_service import TranscriptWithSpeaker, SpeakerInfo
             
@@ -412,8 +441,8 @@ class ASRWorker:
                 )
             ]
         
-        # Step 6: Format results
-        logger.info(f"📦 Step 6/6: Formatting results...")
+        # Step 5: Format results
+        logger.info(f"📦 Step 5/5: Formatting results...")
         
         transcript_data = [seg.to_dict() for seg in merged_segments]
         speakers_data = [spk.to_dict() for spk in speakers_info]
