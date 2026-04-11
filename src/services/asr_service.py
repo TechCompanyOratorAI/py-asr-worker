@@ -197,12 +197,12 @@ class ASRService:
             
             # ⚡ Use BatchedInferencePipeline for ~4-6x faster transcription
             if self.batched_model is not None:
-                logger.info("   ⚡ Using batched inference (batch_size=16)")
+                logger.info("   ⚡ Using batched inference (batch_size=4)")
                 segments, info = self.batched_model.transcribe(
                     audio=audio_path,
                     language=language,
                     beam_size=beam_size,
-                    batch_size=16,  # ⚡ Process 16 chunks simultaneously on GPU
+                    batch_size=4,  # ⚡ RTX 3060 6GB: safe batch size
                     vad_filter=vad_filter,
                     vad_parameters=dict(
                         min_silence_duration_ms=500,
