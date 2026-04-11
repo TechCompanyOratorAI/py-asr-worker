@@ -99,7 +99,9 @@ class ASRService:
                 device=self.device,
                 compute_type=self.compute_type,
                 download_root=None,  # Use default cache
-                local_files_only=False
+                local_files_only=False,
+                cpu_threads=4,   # ⚡ Parallel CPU threads for preprocessing
+                num_workers=1,   # ⚡ CTranslate2 async workers
             )
             
             load_time = time.time() - start_time
@@ -178,12 +180,17 @@ class ASRService:
                 language=language,
                 beam_size=beam_size,
                 vad_filter=vad_filter,
+                vad_parameters=dict(
+                    min_silence_duration_ms=500,   # Merge pauses < 500ms
+                    speech_pad_ms=200,             # Pad speech segments by 200ms
+                ),
                 temperature=temperature,
                 word_timestamps=False,  # We use segment timestamps
-                condition_on_previous_text=True,
+                condition_on_previous_text=False,  # ⚡ ~30-40% faster, no sequential dependency
                 compression_ratio_threshold=2.4,
                 log_prob_threshold=-1.0,
-                no_speech_threshold=0.6
+                no_speech_threshold=0.65,
+                chunk_length=30,  # ⚡ Process 30s chunks for better GPU utilization
             )
             
             # Convert generator to list and format segments

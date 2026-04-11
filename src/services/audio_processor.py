@@ -80,10 +80,7 @@ class AudioProcessor:
             logger.info(f"   - Sample rate: {sample_rate} Hz")
             logger.info(f"   - Channels: {channels} (mono)")
             
-            # Get input audio info
-            input_info = self.get_audio_info(input_path)
-            logger.info(f"   - Input duration: {input_info['duration']:.2f}s")
-            logger.info(f"   - Input format: {input_info.get('format', 'unknown')}")
+
             
             # Build FFmpeg command
             ffmpeg_cmd = [
@@ -129,14 +126,9 @@ class AudioProcessor:
                     details={"expected_output": output_path}
                 )
             
-            # Get output info
-            output_info = self.get_audio_info(output_path)
             output_size = os.path.getsize(output_path)
             
             logger.info(f"✅ Audio normalized successfully")
-            logger.info(f"   - Duration: {output_info['duration']:.2f}s")
-            logger.info(f"   - Sample rate: {output_info['sample_rate']} Hz")
-            logger.info(f"   - Channels: {output_info['channels']}")
             logger.info(f"   - Size: {self._format_size(output_size)}")
             
             return output_path
