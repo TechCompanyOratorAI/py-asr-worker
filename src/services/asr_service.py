@@ -10,9 +10,10 @@ from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass
 
 try:
-    from faster_whisper import WhisperModel
+    from faster_whisper import WhisperModel, BatchedInferencePipeline
 except ImportError:
     WhisperModel = None
+    BatchedInferencePipeline = None
 
 from config.settings import settings
 from utils.logger import get_logger
@@ -52,6 +53,7 @@ class ASRService:
     def __init__(self):
         """Initialize ASR service"""
         self.model = None
+        self.batched_model = None  # ⚡ BatchedInferencePipeline
         self.model_name = settings.WHISPER_MODEL
         self.language = settings.WHISPER_LANGUAGE
         self.device = settings.WHISPER_DEVICE
@@ -65,6 +67,7 @@ class ASRService:
         logger.info(f"   - Language: {self.language}")
         logger.info(f"   - Device: {self.device}")
         logger.info(f"   - Compute type: {self.compute_type}")
+        logger.info(f"   - Batched inference: {BatchedInferencePipeline is not None}")
     
     def load_model(self) -> WhisperModel:
         """
@@ -78,7 +81,7 @@ class ASRService:
         """
         if self._model_loaded and self.model is not None:
             logger.debug("Using cached Whisper model")
-            return self.model
+            return self.batched_model if self.batched_model else self.model
         
         try:
             if WhisperModel is None:
@@ -93,7 +96,7 @@ class ASRService:
             logger.info(f"🔄 Loading Whisper model: {self.model_name}...")
             start_time = time.time()
             
-            # Load model
+            # Load base model
             self.model = WhisperModel(
                 model_size_or_path=self.model_name,
                 device=self.device,
@@ -104,12 +107,20 @@ class ASRService:
                 num_workers=1,   # ⚡ CTranslate2 async workers
             )
             
+            # ⚡ Wrap in BatchedInferencePipeline for ~4-6x faster transcription
+            if BatchedInferencePipeline is not None:
+                self.batched_model = BatchedInferencePipeline(model=self.model)
+                logger.info("   ⚡ BatchedInferencePipeline enabled")
+            else:
+                self.batched_model = None
+                logger.warning("   ⚠️ BatchedInferencePipeline not available, using sequential")
+            
             load_time = time.time() - start_time
             self._model_loaded = True
             
             logger.info(f"✅ Whisper model loaded in {load_time:.2f}s")
             
-            return self.model
+            return self.batched_model if self.batched_model else self.model
             
         except Exception as e:
             logger.error(f"❌ Failed to load Whisper model: {e}", exc_info=True)
@@ -172,26 +183,55 @@ class ASRService:
             # Load model (lazy loading)
             model = self.load_model()
             
+            # Re-enable TF32 for better GPU performance
+            # (pyannote disables it globally, affecting all torch operations)
+            try:
+                import torch
+                torch.backends.cuda.matmul.allow_tf32 = True
+                torch.backends.cudnn.allow_tf32 = True
+            except Exception:
+                pass
+            
             # Transcribe
             start_time = time.time()
             
-            segments, info = model.transcribe(
-                audio=audio_path,
-                language=language,
-                beam_size=beam_size,
-                vad_filter=vad_filter,
-                vad_parameters=dict(
-                    min_silence_duration_ms=500,   # Merge pauses < 500ms
-                    speech_pad_ms=200,             # Pad speech segments by 200ms
-                ),
-                temperature=temperature,
-                word_timestamps=False,  # We use segment timestamps
-                condition_on_previous_text=False,  # ⚡ ~30-40% faster, no sequential dependency
-                compression_ratio_threshold=2.4,
-                log_prob_threshold=-1.0,
-                no_speech_threshold=0.65,
-                chunk_length=30,  # ⚡ Process 30s chunks for better GPU utilization
-            )
+            # ⚡ Use BatchedInferencePipeline for ~4-6x faster transcription
+            if self.batched_model is not None:
+                logger.info("   ⚡ Using batched inference (batch_size=16)")
+                segments, info = self.batched_model.transcribe(
+                    audio=audio_path,
+                    language=language,
+                    beam_size=beam_size,
+                    batch_size=16,  # ⚡ Process 16 chunks simultaneously on GPU
+                    vad_filter=vad_filter,
+                    vad_parameters=dict(
+                        min_silence_duration_ms=500,
+                        speech_pad_ms=200,
+                    ),
+                    temperature=temperature,
+                    word_timestamps=False,
+                    log_prob_threshold=-1.0,
+                    no_speech_threshold=0.65,
+                )
+            else:
+                # Fallback to sequential transcription
+                segments, info = model.transcribe(
+                    audio=audio_path,
+                    language=language,
+                    beam_size=beam_size,
+                    vad_filter=vad_filter,
+                    vad_parameters=dict(
+                        min_silence_duration_ms=500,
+                        speech_pad_ms=200,
+                    ),
+                    temperature=temperature,
+                    word_timestamps=False,
+                    condition_on_previous_text=False,
+                    compression_ratio_threshold=2.4,
+                    log_prob_threshold=-1.0,
+                    no_speech_threshold=0.65,
+                    chunk_length=30,
+                )
             
             # Convert generator to list and format segments
             transcript_segments = []
