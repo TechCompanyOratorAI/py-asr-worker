@@ -390,6 +390,22 @@ class DiarizationService:
                 speaker_stats[speaker_label]['count'] += 1
                 speaker_stats[speaker_label]['total_duration'] += segment.duration
             
+            # Normalize labels so the first speaker appearing in the media is always
+            # SPEAKER_00, the second distinct speaker is SPEAKER_01, and so on.
+            segments = self._normalize_speaker_labels_by_first_appearance(segments)
+
+            # Rebuild speaker statistics after label normalization
+            speaker_stats = {}
+            for segment in segments:
+                if segment.speaker_label not in speaker_stats:
+                    speaker_stats[segment.speaker_label] = {
+                        'count': 0,
+                        'total_duration': 0.0
+                    }
+
+                speaker_stats[segment.speaker_label]['count'] += 1
+                speaker_stats[segment.speaker_label]['total_duration'] += segment.duration
+
             # Calculate total duration
             total_duration = max(seg.end for seg in segments) if segments else 0
             
@@ -565,7 +581,10 @@ class DiarizationService:
         # Build SpeakerInfo list
         speaker_info_list = []
         
-        for speaker_label, data in sorted(speaker_data.items()):
+        for speaker_label, data in sorted(
+            speaker_data.items(),
+            key=lambda item: self._speaker_label_sort_key(item[0])
+        ):
             avg_confidence = sum(data['confidences']) / len(data['confidences'])
             percentage = (data['duration'] / total_duration * 100) if total_duration > 0 else 0
             
@@ -578,9 +597,6 @@ class DiarizationService:
             )
             
             speaker_info_list.append(info)
-        
-        # Sort by duration (descending)
-        speaker_info_list.sort(key=lambda x: x.total_duration, reverse=True)
         
         return speaker_info_list
     
@@ -619,6 +635,62 @@ class DiarizationService:
         else:
             # Fallback: use original label
             return speaker.upper()
+
+    def _normalize_speaker_labels_by_first_appearance(
+        self,
+        segments: List[DiarizationSegment]
+    ) -> List[DiarizationSegment]:
+        """
+        Re-label speakers by first appearance order.
+
+        pyannote speaker IDs are internally consistent but their numbering is not
+        guaranteed to match the order speakers first appear in the recording.
+        """
+        if not segments:
+            return segments
+
+        sorted_segments = sorted(segments, key=lambda seg: (seg.start, seg.end))
+        speaker_mapping = {}
+
+        for segment in sorted_segments:
+            original_label = segment.speaker_label
+            if original_label not in speaker_mapping:
+                speaker_mapping[original_label] = f"SPEAKER_{len(speaker_mapping):02d}"
+
+        if all(
+            speaker_mapping[segment.speaker_label] == segment.speaker_label
+            for segment in sorted_segments
+        ):
+            return sorted_segments
+
+        logger.info(f"🔁 Normalized speaker labels by first appearance: {speaker_mapping}")
+
+        normalized_segments = []
+        for segment in sorted_segments:
+            normalized_segments.append(
+                DiarizationSegment(
+                    speaker_label=speaker_mapping[segment.speaker_label],
+                    start=segment.start,
+                    end=segment.end,
+                    duration=segment.duration,
+                    confidence=segment.confidence,
+                )
+            )
+
+        return normalized_segments
+
+    def _speaker_label_sort_key(self, speaker_label: str) -> Tuple[int, str]:
+        """Sort known speaker labels numerically and keep UNKNOWN at the end."""
+        import re
+
+        match = re.search(r'(\d+)', speaker_label or '')
+        if match:
+            return (0, f"{int(match.group(1)):06d}")
+
+        if speaker_label == "UNKNOWN":
+            return (2, speaker_label)
+
+        return (1, speaker_label or "")
     
     def unload_pipeline(self) -> None:
         """Unload pipeline from memory"""
