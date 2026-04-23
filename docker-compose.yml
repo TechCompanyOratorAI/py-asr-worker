@@ -9,7 +9,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: py-asr-worker
     restart: unless-stopped
 
     # Environment variables
@@ -24,7 +23,6 @@ services:
       - ./logs:/app/logs
       # Model cache (persist downloaded models across restarts)
       - asr-models:/app/models
-      - huggingface-cache:/home/asrworker/.cache/huggingface
       # Temporary audio files (named volume — portable trên Windows Docker Desktop)
       - asr-temp:/tmp/asr-worker
 
@@ -44,7 +42,13 @@ services:
 
     # Health check
     healthcheck:
-      test: ["CMD", "python", "-c", "import torch; assert torch.cuda.is_available(); import sys; sys.exit(0)"]
+      test: [
+          "CMD",
+          "python",
+          "-c",
+          "import torch; assert torch.cuda.is_available(); import sys;
+          sys.exit(0)",
+        ]
       interval: 30s
       timeout: 30s
       retries: 3
@@ -89,8 +93,6 @@ services:
 # =============================================================================
 volumes:
   asr-models:
-    driver: local
-  huggingface-cache:
     driver: local
   asr-temp:
     driver: local

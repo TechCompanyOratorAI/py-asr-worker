@@ -4,11 +4,12 @@ from pathlib import Path
 import torch
 
 torch_lib = Path(torch.__file__).parent / "lib"
-os.add_dll_directory(str(torch_lib))
-try:
-    ctypes.WinDLL(str(torch_lib / "cudnn64_9.dll"))
-except Exception:
-    pass  # If DLL not found, continue
+if os.name == "nt" and hasattr(os, "add_dll_directory"):
+    os.add_dll_directory(str(torch_lib))
+    try:
+        ctypes.WinDLL(str(torch_lib / "cudnn64_9.dll"))
+    except Exception:
+        pass  # If DLL not found, continue
 # --------------------------------------------
 
 """
