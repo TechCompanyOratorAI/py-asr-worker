@@ -79,8 +79,10 @@ class AudioProcessor:
             logger.info(f"   - Output: {output_path}")
             logger.info(f"   - Sample rate: {sample_rate} Hz")
             logger.info(f"   - Channels: {channels} (mono)")
+            logger.info(f"   - Noise reduction: {settings.AUDIO_NOISE_REDUCTION}")
             
-
+            # Build audio filter chain
+            audio_filters = self._build_audio_filter_chain()
             
             # Build FFmpeg command
             ffmpeg_cmd = [
@@ -89,12 +91,18 @@ class AudioProcessor:
                 '-ar', str(sample_rate),    # Sample rate
                 '-ac', str(channels),       # Channels (1 = mono)
                 '-c:a', 'pcm_s16le',       # Codec: PCM 16-bit little-endian
+            ]
+            
+            # Inject audio filters if any
+            if audio_filters:
+                ffmpeg_cmd += ['-af', audio_filters]
+                logger.info(f"   - FFmpeg filters: {audio_filters}")
+            
+            ffmpeg_cmd += [
                 '-y',                       # Overwrite output file
                 output_path                 # Output file
             ]
             
-            # Add audio normalization filter
-            # Uses loudnorm filter for EBU R128 loudness normalization
             if settings.DEBUG:
                 logger.debug(f"FFmpeg command: {' '.join(ffmpeg_cmd)}")
             
@@ -425,6 +433,51 @@ class AudioProcessor:
             raise AudioProcessingError(
                 f"Failed to verify FFmpeg installation: {e}"
             )
+    
+    def _build_audio_filter_chain(self) -> str:
+        """
+        Build FFmpeg audio filter chain for noise reduction and enhancement.
+        
+        Filter chain (applied in order):
+          1. afftdn   — FFT-based noise reduction (removes broadband noise floor)
+          2. highpass — Remove low-frequency rumble / hum (below AUDIO_HIGHPASS_HZ)
+          3. lowpass  — Remove high-frequency hiss / RF (above AUDIO_LOWPASS_HZ)
+          4. acompressor — Dynamic range compression (boosts quiet speech segments)
+          5. loudnorm — EBU R128 loudness normalization (consistent output level)
+        
+        Returns:
+            FFmpeg -af filter string, or empty string if noise reduction disabled.
+        """
+        if not settings.AUDIO_NOISE_REDUCTION:
+            # Still apply loudnorm for consistent volume even without noise reduction
+            return "loudnorm=I=-16:TP=-1.5:LRA=11"
+        
+        filters = []
+        
+        # 1. FFT-based noise reduction
+        # nf = noise floor dB, nt=w (white noise type), om=o (output: filtered signal)
+        nf = settings.AUDIO_NOISE_FLOOR_DB
+        filters.append(f"afftdn=nf={nf}:nt=w:om=o")
+        
+        # 2. High-pass: remove low-freq rumble / AC hum / wind below cutoff
+        hp = settings.AUDIO_HIGHPASS_HZ
+        filters.append(f"highpass=f={hp}")
+        
+        # 3. Low-pass: remove high-freq hiss / RF noise above cutoff
+        # Speech fundamental: 85-255 Hz; formants up to ~8 kHz
+        lp = settings.AUDIO_LOWPASS_HZ
+        filters.append(f"lowpass=f={lp}")
+        
+        # 4. Dynamic range compressor — boost quiet speech, reduce peaks
+        if settings.AUDIO_COMPRESSOR_ENABLED:
+            filters.append(
+                "acompressor=threshold=0.05:ratio=4:attack=5:release=100:makeup=2"
+            )
+        
+        # 5. EBU R128 loudness normalization — consistent volume for Whisper
+        filters.append("loudnorm=I=-16:TP=-1.5:LRA=11")
+        
+        return ",".join(filters)
     
     @staticmethod
     def _format_size(size_bytes: int) -> str:

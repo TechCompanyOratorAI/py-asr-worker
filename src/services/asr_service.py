@@ -195,6 +195,21 @@ class ASRService:
             # Transcribe
             start_time = time.time()
             
+            # Whisper accuracy params driven by settings (tuned for noisy audio)
+            no_speech_threshold = settings.WHISPER_NO_SPEECH_THRESHOLD
+            log_prob_threshold  = settings.WHISPER_LOG_PROB_THRESHOLD
+            compression_ratio   = settings.WHISPER_COMPRESSION_RATIO_THRESHOLD
+            condition_on_prev   = settings.WHISPER_CONDITION_ON_PREV_TEXT
+            
+            # Fallback temperatures: if greedy (0.0) confidence is low,
+            # Whisper will retry with higher temperatures — reduces hallucination on noise.
+            temperatures = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0] if temperature == 0.0 else temperature
+            
+            logger.info(f"   - no_speech_threshold: {no_speech_threshold}")
+            logger.info(f"   - log_prob_threshold: {log_prob_threshold}")
+            logger.info(f"   - condition_on_prev_text: {condition_on_prev}")
+            logger.info(f"   - temperatures: {temperatures}")
+            
             # ⚡ Use BatchedInferencePipeline for ~4-6x faster transcription
             if self.batched_model is not None:
                 logger.info("   ⚡ Using batched inference (batch_size=4)")
@@ -202,34 +217,36 @@ class ASRService:
                     audio=audio_path,
                     language=language,
                     beam_size=beam_size,
-                    batch_size=4,  # ⚡ RTX 3060 6GB: safe batch size
+                    batch_size=4,           # ⚡ RTX 3060 6GB: safe batch size
                     vad_filter=vad_filter,
                     vad_parameters=dict(
-                        min_silence_duration_ms=500,
+                        min_silence_duration_ms=300,  # shorter window catches more speech
                         speech_pad_ms=200,
                     ),
-                    temperature=temperature,
+                    temperature=temperatures,
                     word_timestamps=False,
-                    log_prob_threshold=-1.0,
-                    no_speech_threshold=0.65,
+                    log_prob_threshold=log_prob_threshold,
+                    no_speech_threshold=no_speech_threshold,
+                    compression_ratio_threshold=compression_ratio,
                 )
             else:
                 # Fallback to sequential transcription
+                logger.info("   🔄 Using sequential inference")
                 segments, info = model.transcribe(
                     audio=audio_path,
                     language=language,
                     beam_size=beam_size,
                     vad_filter=vad_filter,
                     vad_parameters=dict(
-                        min_silence_duration_ms=500,
+                        min_silence_duration_ms=300,
                         speech_pad_ms=200,
                     ),
-                    temperature=temperature,
+                    temperature=temperatures,
                     word_timestamps=False,
-                    condition_on_previous_text=False,
-                    compression_ratio_threshold=2.4,
-                    log_prob_threshold=-1.0,
-                    no_speech_threshold=0.65,
+                    condition_on_previous_text=condition_on_prev,
+                    compression_ratio_threshold=compression_ratio,
+                    log_prob_threshold=log_prob_threshold,
+                    no_speech_threshold=no_speech_threshold,
                     chunk_length=30,
                 )
             

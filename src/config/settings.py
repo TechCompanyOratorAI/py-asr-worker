@@ -73,7 +73,7 @@ class Settings(BaseSettings):
     
     # Additional fields from .env (optional)
     AWS_S3_REGION: Optional[str] = Field(default=None, description="S3 region (optional)")
-    BEAM_SIZE: Optional[int] = Field(default=5, description="Whisper beam size")
+    BEAM_SIZE: Optional[int] = Field(default=5, description="Whisper beam size (higher = more accurate, slower)")
     VAD_FILTER: Optional[bool] = Field(default=True, description="Enable VAD filter")
     OVERLAP_THRESHOLD: Optional[float] = Field(default=0.3, description="Speaker overlap threshold (0.0-1.0). Lower = more permissive matching")
     MAX_AUDIO_SIZE_MB: Optional[int] = Field(default=500, description="Max audio file size")
@@ -85,6 +85,23 @@ class Settings(BaseSettings):
     NUM_WORKERS: Optional[int] = Field(default=4, description="Number of worker threads")
     DOWNLOAD_CHUNK_SIZE: Optional[int] = Field(default=8388608, description="Download chunk size")
     UPLOAD_CHUNK_SIZE: Optional[int] = Field(default=8388608, description="Upload chunk size")
+    
+    # ========================================
+    # Audio Enhancement / Noise Reduction
+    # ========================================
+    AUDIO_NOISE_REDUCTION: bool = Field(default=True, description="Enable FFmpeg noise reduction filter chain")
+    AUDIO_NOISE_FLOOR_DB: int = Field(default=-25, description="FFT noise floor threshold in dB (e.g. -25). More negative = more aggressive")
+    AUDIO_HIGHPASS_HZ: int = Field(default=80, description="High-pass filter cutoff Hz (removes low-freq rumble/hum)")
+    AUDIO_LOWPASS_HZ: int = Field(default=8000, description="Low-pass filter cutoff Hz (removes high-freq hiss)")
+    AUDIO_COMPRESSOR_ENABLED: bool = Field(default=True, description="Enable dynamic range compressor (boosts quiet speech)")
+    
+    # ========================================
+    # Whisper Accuracy Tuning (Noisy Audio)
+    # ========================================
+    WHISPER_NO_SPEECH_THRESHOLD: float = Field(default=0.45, description="no_speech_prob threshold (lower = detect more speech in noise)")
+    WHISPER_LOG_PROB_THRESHOLD: float = Field(default=-1.2, description="avg_logprob threshold (more negative = more permissive)")
+    WHISPER_COMPRESSION_RATIO_THRESHOLD: float = Field(default=2.4, description="Compression ratio threshold for hallucination detection")
+    WHISPER_CONDITION_ON_PREV_TEXT: bool = Field(default=False, description="Condition on previous text (False reduces hallucination on noisy audio)")
     
     # ========================================
     # Logging Configuration
