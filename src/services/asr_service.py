@@ -197,21 +197,23 @@ class ASRService:
             
             # ⚡ Use BatchedInferencePipeline for ~4-6x faster transcription
             if self.batched_model is not None:
-                logger.info("   ⚡ Using batched inference (batch_size=4)")
+                logger.info("   ⚡ Using batched inference (batch_size=8)")
                 segments, info = self.batched_model.transcribe(
                     audio=audio_path,
                     language=language,
                     beam_size=beam_size,
-                    batch_size=4,  # ⚡ RTX 3060 6GB: safe batch size
+                    batch_size=8,  # ⚡ RTX 3060 6GB + int8_float16: safe at batch_size=8
                     vad_filter=vad_filter,
                     vad_parameters=dict(
-                        min_silence_duration_ms=500,
-                        speech_pad_ms=200,
+                        min_silence_duration_ms=400,  # 500→400: catch shorter pauses
+                        speech_pad_ms=100,  # 200→100: less boundary bleed for speaker mapping
                     ),
                     temperature=temperature,
                     word_timestamps=False,
+                    condition_on_previous_text=True,  # improves context continuity
+                    compression_ratio_threshold=2.4,
                     log_prob_threshold=-1.0,
-                    no_speech_threshold=0.65,
+                    no_speech_threshold=0.6,  # 0.65→0.6: slightly more sensitive
                 )
             else:
                 # Fallback to sequential transcription
@@ -221,15 +223,15 @@ class ASRService:
                     beam_size=beam_size,
                     vad_filter=vad_filter,
                     vad_parameters=dict(
-                        min_silence_duration_ms=500,
-                        speech_pad_ms=200,
+                        min_silence_duration_ms=400,
+                        speech_pad_ms=100,
                     ),
                     temperature=temperature,
                     word_timestamps=False,
-                    condition_on_previous_text=False,
+                    condition_on_previous_text=True,
                     compression_ratio_threshold=2.4,
                     log_prob_threshold=-1.0,
-                    no_speech_threshold=0.65,
+                    no_speech_threshold=0.6,
                     chunk_length=30,
                 )
             

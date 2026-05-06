@@ -529,21 +529,27 @@ class DiarizationService:
             
             merged_segments.append(merged)
         
+        # Post-process: resolve UNKNOWN segments using nearest known neighbors
+        resolved_count = self._resolve_unknown_segments(merged_segments)
+        unknown_final = sum(1 for s in merged_segments if s.speaker_label == "UNKNOWN")
+
         logger.info(f"✅ Merge complete")
         logger.info(f"   - Merged segments: {len(merged_segments)}")
-        logger.info(f"   - Unknown speaker: {unknown_count} segments")
-        
+        logger.info(f"   - Unknown speaker (before resolve): {unknown_count} segments")
+        logger.info(f"   - Unknown speaker (after resolve): {unknown_final} segments")
+        logger.info(f"   - Resolved by neighbor: {resolved_count} segments")
+
         # Log speaker distribution
         speaker_counts = {}
         for seg in merged_segments:
             if seg.speaker_label not in speaker_counts:
                 speaker_counts[seg.speaker_label] = 0
             speaker_counts[seg.speaker_label] += 1
-        
+
         for speaker, count in sorted(speaker_counts.items()):
             percentage = (count / len(merged_segments) * 100) if merged_segments else 0
             logger.info(f"   - {speaker}: {count} segments ({percentage:.1f}%)")
-        
+
         return merged_segments
     
     def get_speaker_info(
@@ -600,6 +606,61 @@ class DiarizationService:
         
         return speaker_info_list
     
+    def _resolve_unknown_segments(
+        self,
+        merged_segments: List[TranscriptWithSpeaker]
+    ) -> int:
+        """
+        Assign speaker to UNKNOWN segments based on nearest known neighbors.
+
+        Mutates merged_segments in-place. Returns number of segments resolved.
+
+        Strategy:
+        - Look at the closest known speaker before and after the UNKNOWN segment.
+        - Assign to whichever known speaker is temporally nearer.
+        - If only one side has a known speaker, use that.
+        - Confidence is set to 0.25 (low) to signal it was inferred, not measured.
+        """
+        resolved = 0
+
+        for i, seg in enumerate(merged_segments):
+            if seg.speaker_label != "UNKNOWN":
+                continue
+
+            prev_speaker = None
+            prev_end = seg.start  # default: no gap
+
+            for j in range(i - 1, -1, -1):
+                if merged_segments[j].speaker_label != "UNKNOWN":
+                    prev_speaker = merged_segments[j].speaker_label
+                    prev_end = merged_segments[j].end
+                    break
+
+            next_speaker = None
+            next_start = seg.end  # default: no gap
+
+            for j in range(i + 1, len(merged_segments)):
+                if merged_segments[j].speaker_label != "UNKNOWN":
+                    next_speaker = merged_segments[j].speaker_label
+                    next_start = merged_segments[j].start
+                    break
+
+            if prev_speaker is None and next_speaker is None:
+                continue  # No known neighbors — leave UNKNOWN
+
+            if prev_speaker is not None and next_speaker is not None:
+                gap_to_prev = seg.start - prev_end
+                gap_to_next = next_start - seg.end
+                chosen = prev_speaker if gap_to_prev <= gap_to_next else next_speaker
+            else:
+                chosen = prev_speaker if prev_speaker is not None else next_speaker
+
+            seg.speaker_label = chosen
+            seg.confidence = 0.25
+            resolved += 1
+
+        return resolved
+
     def _find_overlapping_segments(
         self,
         start: float,
