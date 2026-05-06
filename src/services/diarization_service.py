@@ -499,15 +499,30 @@ class DiarizationService:
                     
                     speaker_overlaps[diaz_seg.speaker_label] += overlap_duration
                 
-                # Get speaker with maximum overlap
-                max_speaker = max(speaker_overlaps.items(), key=lambda x: x[1])
-                speaker_label = max_speaker[0]
-                overlap_duration = max_speaker[1]
-                
+                # Get speaker with maximum overlap; break ties by midpoint coverage
+                max_overlap_val = max(speaker_overlaps.values())
+                top_speakers = [
+                    spk for spk, dur in speaker_overlaps.items()
+                    if dur >= max_overlap_val - 1e-6
+                ]
+                if len(top_speakers) == 1:
+                    speaker_label = top_speakers[0]
+                    overlap_duration = speaker_overlaps[speaker_label]
+                else:
+                    # Tie: pick whichever speaker's diarization segment covers the midpoint
+                    midpoint = (ts.start + ts.end) / 2
+                    speaker_label = top_speakers[0]  # fallback
+                    for diaz_seg in overlapping:
+                        if diaz_seg.speaker_label in top_speakers:
+                            if diaz_seg.start <= midpoint < diaz_seg.end:
+                                speaker_label = diaz_seg.speaker_label
+                                break
+                    overlap_duration = speaker_overlaps[speaker_label]
+
                 # Calculate confidence based on overlap ratio
                 segment_duration = ts.end - ts.start
                 overlap_ratio = overlap_duration / segment_duration if segment_duration > 0 else 0
-                
+
                 # Check if overlap meets threshold
                 if overlap_ratio < overlap_threshold:
                     speaker_label = "UNKNOWN"
@@ -529,8 +544,8 @@ class DiarizationService:
             
             merged_segments.append(merged)
         
-        # Post-process: resolve UNKNOWN segments using nearest known neighbors
-        resolved_count = self._resolve_unknown_segments(merged_segments)
+        # Post-process: resolve UNKNOWN segments — prefer diarization data over neighbor heuristic
+        resolved_count = self._resolve_unknown_segments(merged_segments, diarization_segments)
         unknown_final = sum(1 for s in merged_segments if s.speaker_label == "UNKNOWN")
 
         logger.info(f"✅ Merge complete")
@@ -608,18 +623,24 @@ class DiarizationService:
     
     def _resolve_unknown_segments(
         self,
-        merged_segments: List[TranscriptWithSpeaker]
+        merged_segments: List[TranscriptWithSpeaker],
+        diarization_segments: List[DiarizationSegment],
     ) -> int:
         """
-        Assign speaker to UNKNOWN segments based on nearest known neighbors.
+        Assign speaker to UNKNOWN segments.
 
         Mutates merged_segments in-place. Returns number of segments resolved.
 
-        Strategy:
-        - Look at the closest known speaker before and after the UNKNOWN segment.
-        - Assign to whichever known speaker is temporally nearer.
-        - If only one side has a known speaker, use that.
-        - Confidence is set to 0.25 (low) to signal it was inferred, not measured.
+        Strategy (in priority order):
+        1. Re-check diarization data ignoring the overlap threshold: even a small
+           overlap is more reliable than guessing from neighbors in round-robin
+           conversations where the same speaker reappears multiple times.
+        2. If no diarization segment covers this window at all, fall back to the
+           temporally nearest known neighbor.
+
+        Confidence values:
+        - Strategy 1: actual overlap ratio (capped at 1.0), always > 0.
+        - Strategy 2: 0.15 to clearly flag it as a heuristic guess.
         """
         resolved = 0
 
@@ -627,8 +648,29 @@ class DiarizationService:
             if seg.speaker_label != "UNKNOWN":
                 continue
 
+            # --- Strategy 1: best diarization overlap, threshold ignored ---
+            overlapping = self._find_overlapping_segments(
+                seg.start, seg.end, diarization_segments
+            )
+            if overlapping:
+                speaker_overlaps: Dict[str, float] = {}
+                for diaz_seg in overlapping:
+                    dur = diaz_seg.overlap_duration(seg.start, seg.end)
+                    speaker_overlaps[diaz_seg.speaker_label] = (
+                        speaker_overlaps.get(diaz_seg.speaker_label, 0.0) + dur
+                    )
+                best_speaker, best_dur = max(speaker_overlaps.items(), key=lambda x: x[1])
+                seg_duration = seg.end - seg.start
+                seg.speaker_label = best_speaker
+                seg.confidence = min(
+                    best_dur / seg_duration if seg_duration > 0 else 0.1, 1.0
+                )
+                resolved += 1
+                continue
+
+            # --- Strategy 2: nearest known neighbor (no diarization coverage) ---
             prev_speaker = None
-            prev_end = seg.start  # default: no gap
+            prev_end = seg.start
 
             for j in range(i - 1, -1, -1):
                 if merged_segments[j].speaker_label != "UNKNOWN":
@@ -637,7 +679,7 @@ class DiarizationService:
                     break
 
             next_speaker = None
-            next_start = seg.end  # default: no gap
+            next_start = seg.end
 
             for j in range(i + 1, len(merged_segments)):
                 if merged_segments[j].speaker_label != "UNKNOWN":
@@ -646,7 +688,7 @@ class DiarizationService:
                     break
 
             if prev_speaker is None and next_speaker is None:
-                continue  # No known neighbors — leave UNKNOWN
+                continue  # Truly uncoverable — leave UNKNOWN
 
             if prev_speaker is not None and next_speaker is not None:
                 gap_to_prev = seg.start - prev_end
@@ -656,7 +698,7 @@ class DiarizationService:
                 chosen = prev_speaker if prev_speaker is not None else next_speaker
 
             seg.speaker_label = chosen
-            seg.confidence = 0.25
+            seg.confidence = 0.15
             resolved += 1
 
         return resolved
