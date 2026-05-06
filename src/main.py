@@ -366,34 +366,35 @@ class ASRWorker:
         logger.info(f"   - Duration: {audio_info['duration']:.2f}s")
         logger.info(f"   - Sample rate: {audio_info['sample_rate']} Hz")
         
-        # Step 3: ASR + Diarization (PARALLEL) ⚡
+        # Step 3: ASR then Diarization (sequential — parallel OOMs on 6GB GPU)
         if settings.DIARIZATION_ENABLED and self.diarization_service:
-            logger.info(f"⚡ Step 3/5: Running ASR + Diarization in PARALLEL...")
-            parallel_start = time.time()
-            
-            with ThreadPoolExecutor(max_workers=2) as executor:
-                # Submit both tasks simultaneously
-                asr_future = executor.submit(
-                    self.asr_service.transcribe,
-                    audio_path=normalized_path,
-                    language=settings.WHISPER_LANGUAGE,
-                    beam_size=settings.BEAM_SIZE,
-                    vad_filter=settings.VAD_FILTER
-                )
-                diarization_future = executor.submit(
-                    self.diarization_service.diarize,
-                    audio_path=normalized_path,
-                    min_speakers=settings.MIN_SPEAKERS,
-                    max_speakers=settings.MAX_SPEAKERS
-                )
-                
-                # Wait for both to complete
-                transcript_segments = asr_future.result()
-                diarization_segments = diarization_future.result()
-            
-            parallel_time = time.time() - parallel_start
-            logger.info(f"   ⚡ Parallel ASR+Diarization completed in {parallel_time:.2f}s")
-            
+            logger.info(f"🎤 Step 3a/5: Running ASR transcription...")
+            asr_start = time.time()
+            transcript_segments = self.asr_service.transcribe(
+                audio_path=normalized_path,
+                language=settings.WHISPER_LANGUAGE,
+                beam_size=settings.BEAM_SIZE,
+                vad_filter=settings.VAD_FILTER
+            )
+            logger.info(f"   ASR done in {time.time() - asr_start:.2f}s")
+
+            # Release CUDA activations between the two models
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
+
+            logger.info(f"👥 Step 3b/5: Running speaker diarization...")
+            diaz_start = time.time()
+            diarization_segments = self.diarization_service.diarize(
+                audio_path=normalized_path,
+                min_speakers=settings.MIN_SPEAKERS,
+                max_speakers=settings.MAX_SPEAKERS
+            )
+            logger.info(f"   Diarization done in {time.time() - diaz_start:.2f}s")
+
             # Step 4: Merge transcript with diarization
             logger.info(f"🔗 Step 4/5: Merging transcript with speakers...")
             merged_segments = self.diarization_service.merge_with_transcript(
