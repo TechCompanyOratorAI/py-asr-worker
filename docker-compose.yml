@@ -10,6 +10,7 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
+    gpus: all
 
     # Environment variables
     env_file:
