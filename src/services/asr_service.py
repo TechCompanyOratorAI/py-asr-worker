@@ -197,23 +197,12 @@ class ASRService:
             
             # ⚡ Use BatchedInferencePipeline for ~4-6x faster transcription
             if self.batched_model is not None:
-                logger.info("   ⚡ Using batched inference (batch_size=8)")
-                segments, info = self.batched_model.transcribe(
-                    audio=audio_path,
+                segments, info = self._batched_transcribe_with_oom_recovery(
+                    audio_path=audio_path,
                     language=language,
                     beam_size=beam_size,
-                    batch_size=8,  # ⚡ RTX 3060 6GB + int8_float16: safe at batch_size=8
                     vad_filter=vad_filter,
-                    vad_parameters=dict(
-                        min_silence_duration_ms=400,  # 500→400: catch shorter pauses
-                        speech_pad_ms=100,  # 200→100: less boundary bleed for speaker mapping
-                    ),
                     temperature=temperature,
-                    word_timestamps=False,
-                    condition_on_previous_text=True,  # improves context continuity
-                    compression_ratio_threshold=2.4,
-                    log_prob_threshold=-1.0,
-                    no_speech_threshold=0.6,  # 0.65→0.6: slightly more sensitive
                 )
             else:
                 # Fallback to sequential transcription
@@ -295,6 +284,59 @@ class ASRService:
                 }
             )
     
+    def _batched_transcribe_with_oom_recovery(
+        self,
+        audio_path: str,
+        language: str,
+        beam_size: int,
+        vad_filter: bool,
+        temperature: float,
+    ):
+        """
+        Run BatchedInferencePipeline with automatic OOM recovery.
+
+        Tries batch_size=[4, 2, 1] in order. batch_size=1 is effectively
+        sequential and should always succeed within the 6GB VRAM budget.
+        """
+        import torch
+        vad_params = dict(min_silence_duration_ms=400, speech_pad_ms=100)
+        common_kwargs = dict(
+            audio=audio_path,
+            language=language,
+            beam_size=beam_size,
+            vad_filter=vad_filter,
+            vad_parameters=vad_params,
+            temperature=temperature,
+            word_timestamps=False,
+            condition_on_previous_text=True,
+            compression_ratio_threshold=2.4,
+            log_prob_threshold=-1.0,
+            no_speech_threshold=0.6,
+        )
+
+        for batch_size in [4, 2, 1]:
+            try:
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                logger.info(f"   ⚡ Batched inference (batch_size={batch_size})")
+                segments, info = self.batched_model.transcribe(
+                    **common_kwargs, batch_size=batch_size
+                )
+                # Materialise the lazy generator NOW so OOM surfaces here, not later
+                segments = list(segments)
+                return segments, info
+            except RuntimeError as exc:
+                if "out of memory" not in str(exc).lower():
+                    raise
+                logger.warning(
+                    f"   ⚠️ CUDA OOM at batch_size={batch_size}, "
+                    f"{'retrying smaller' if batch_size > 1 else 'giving up'}"
+                )
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                if batch_size == 1:
+                    raise  # Nothing left to try
+
     def transcribe_batch(
         self,
         audio_paths: List[str],
